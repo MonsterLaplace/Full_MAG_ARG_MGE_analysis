@@ -160,7 +160,7 @@ python merge_coverm.py 09_mapping/coverm/*.fixed.tsv \
     -o 13_tables/sample_mag_abundance.tsv \
     --long_out 13_tables/sample_mag_abundance.long.tsv
 
-通过以上结果获得
+#获得sample_mag_abundance.tsv和sample_mag_abundance.long.tsv，得到MAG X abundance的结果
 
 
 
