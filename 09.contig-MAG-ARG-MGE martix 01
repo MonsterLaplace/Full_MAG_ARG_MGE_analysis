@@ -152,36 +152,15 @@ python merge_all_contig_mge.py \
   -i 13_tables/mge_parsed \
   -o 13_tables/all_samples.contig_mge.tsv
 
-#MAG丰度对照表
-#coverm的结果第一行存在unmapped的结果，输出结果不标准，要改成标准格式
+#9.4 MAG丰度对照表
+#coverm的结果第一行存在unmapped的结果，标题行描写也不对，输出结果不标准，要改成标准格式
+python batch_fix_coverm_tsv.py
 
+python merge_coverm.py 09_mapping/coverm/*.fixed.tsv \ 
+    -o 13_tables/sample_mag_abundance.tsv \
+    --long_out 13_tables/sample_mag_abundance.long.tsv
 
-
-#关联arg与mge结果，得到contig X ARG X MGE对照表
-python merge_contig_arg_mge.py \
-  --arg 13_tables/contig_arg_highconf_std.tsv\
-  --mge 13_tables/all_samples.contig_mge.tsv\
-  -o 13_tables/contig_arg_mge.tsv \
-  --summary 13_tables/contig_arg_mge_summary.tsv
-
-
-
-python - <<'PY'
-import pandas as pd
-df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
-print("Loose mobile ARGs:", df["putative_mobile_ARG_loose"].sum())
-print("Strict mobile ARGs:", df["putative_mobile_ARG_strict"].sum())
-print("Total ARG records:", df.shape[0])
-PY
-
-python - <<'PY'
-import pandas as pd
-df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
-res = df.groupby("ARG")[["putative_mobile_ARG_loose","putative_mobile_ARG_strict"]].sum().sort_values("putative_mobile_ARG_strict", ascending=False)
-print(res.head(20))
-PY
-
-#通过以上结果分别获得mag_arg_highconf.tsv, contig_arg_highconf.tsv, 
+通过以上结果获得
 
 
 
