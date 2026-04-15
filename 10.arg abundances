@@ -1,0 +1,42 @@
+#10. ARG基因丰度
+#10.1 提取ARG基因
+python build_arg_reference_from_ffn.py \
+  --arg_table 13_tables/contig_arg_mge.tsv\
+  --ffn_dir 12_contig_level/prodigal \
+  --out_fasta 10_annotation/arg/all_ARG_candidates.fa \
+  --out_map 10_annotation/arg/all_ARG_candidates.map.tsv
+
+#10.2 salmon定量
+conda activate salmon
+set -euo pipefail
+
+SAMPLE_TSV="00_meta/samples.tsv"
+INDEX="10_annotation/arg/salmon_index"
+OUTDIR="13_tables/salmon_arg"
+THREADS=64
+
+mkdir -p "${OUTDIR}"
+
+tail -n +2 "${SAMPLE_TSV}" | while IFS=$'\t' read -r sample host site season sex age r1 r2
+do
+    echo "[INFO] Quantifying ARGs for ${sample}"
+
+    R1="/03_host_removed/${sample}.hostFree.R1.fq.gz"
+    R2="/03_host_removed/${sample}.hostFree.R2.fq.gz"
+
+    salmon quant \
+        -i "${INDEX}" \
+        -l A \
+        -1 "${R1}" \
+        -2 "${R2}" \
+        -p "${THREADS}" \
+        --validateMappings \
+        -o "${OUTDIR}/${sample}"
+done
+
+#10.3 获得ARG X abundance对照表
+python merge_salmon_arg_to_matrix.py \
+  --salmon_dir 13_tables/salmon_arg \
+  --arg_map 10_annotation/arg/all_ARG_candidates.map.tsv \
+  --value_col TPM \
+  --output 13_tables/sample_arg_abundance.tsv
