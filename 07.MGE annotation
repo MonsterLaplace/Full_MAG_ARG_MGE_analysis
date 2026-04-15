@@ -1,0 +1,114 @@
+#7. MGE 分析：geNomad + IntegronFinder + ISEScan
+#7.1 geNomad：检测 plasmid / virus / mobile elements 倾向
+
+#对 MAG catalog 注释
+conda activate genomad
+mkdir -p 11_mge/genomad
+
+genomad end-to-end \
+  --threads 32 \
+  07_drep/mag_catalog.fa \
+  11_mge/genomad \
+  /path/to/genomad_db
+
+#对每个样本 contigs 注释
+for fa in 04_assembly/*/final.contigs.fa; do
+  sample=$(basename $(dirname "$fa"))
+  genomad end-to-end \
+    --threads 16 \
+    "$fa" \
+    "11_mge/genomad/${sample}" \
+    /path/to/genomad_db
+done
+conda deactivate
+
+#7.2 IntegronFinder
+#对每个MAG注释
+conda activate integron
+mkdir -p 11_mge/integron
+
+for fa in 07_drep/out/dereplicated_genomes/*.fa; do
+  id=$(basename "$fa" .fa)
+  integron_finder "$fa" \
+    --local-max \
+    --func-annot \
+    --cpu 8 \
+    --outdir "11_mge/integron/${id}"
+done
+#对每个contig注释，并行10个
+mkdir -p 11_mge/integron/logs
+
+max_jobs=10
+job_count=0
+
+for fa in 04_assembly/*/final.contigs.fa; do
+  sample=$(basename "$(dirname "$fa")")
+
+  (
+    echo "[START] $sample $(date)"
+    integron_finder "$fa" \
+      --local-max \
+      --func-annot \
+      --cpu 16 \
+      --outdir "11_mge/integron/${sample}"
+    status=$?
+    echo "[END]   $sample $(date) exit=${status}"
+    exit $status
+  ) > "11_mge/integron/logs/${sample}.log" 2>&1 &
+
+  ((job_count++))
+
+  if (( job_count % max_jobs == 0 )); then
+    wait
+  fi
+done
+
+wait
+conda deactivate
+
+#7.3 ISEScan
+#对每个MAG注释
+conda activate isescan
+mkdir -p 11_mge/isescan
+
+for fa in 07_drep/out/dereplicated_genomes/*.fa; do
+  id=$(basename "$fa" .fa)
+  isescan.py \
+    --seqfile "$fa" \
+    --output "11_mge/isescan/${id}" \
+    --nthread 8
+done
+
+#对每个contig注释，并行10个
+#!/usr/bin/env bash
+
+mkdir -p 11_mge/isescan
+mkdir -p 11_mge/isescan/logs
+
+max_jobs=10
+threads_per_job=16
+job_count=0
+
+for fa in 04_assembly/Allcontigs/clean_fa/*.fa; do
+  id=$(basename "$fa" .fa)
+
+  (
+    echo "[START] $id $(date)"
+    isescan.py \
+      --seqfile "$fa" \
+      --output "11_mge/isescan/${id}" \
+      --nthread "${threads_per_job}"
+    status=$?
+    echo "[END]   $id $(date) exit=${status}"
+    exit $status
+  ) > "11_mge/isescan/logs/${id}.log" 2>&1 &
+
+  ((job_count++))
+
+  if (( job_count % max_jobs == 0 )); then
+    wait
+  fi
+done
+
+wait
+conda deactivate
