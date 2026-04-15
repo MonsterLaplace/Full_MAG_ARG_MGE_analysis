@@ -1,0 +1,208 @@
+#9. 生成核心关联表
+#你最终至少要做 4 张核心表：
+#sample x MAG abundance
+#MAG x ARG
+#contig x ARG
+#contig x MGE
+#再整合成：
+#MAG x MGE-associated ARG
+#下面是基本流程：
+
+#9.1 合并 MAG 层 ARG 注释
+out="13_tables/mag_arg.tsv"
+
+# 写表头
+printf "MAG\tProtein_id\tElement_symbol\tElement_name\tScope\tType\tSubtype\tClass\tSubclass\tMethod\n" > "$out"
+
+for f in 10_annotation/arg/amrfinder/*.tsv; do
+    [ -e "$f" ] || continue
+
+    mag=$(basename "$f" .tsv)
+
+    # 如果文件行数 <= 1，说明只有表头或空文件，跳过
+    nlines=$(wc -l < "$f")
+    if [ "$nlines" -le 1 ]; then
+        echo "[INFO] Skip empty/no-hit file: $f"
+        continue
+    fi
+
+    # 提取需要的列：
+    # 1  Protein id
+    # 2  Element symbol
+    # 3  Element name
+    # 4  Scope
+    # 5  Type
+    # 6  Subtype
+    # 7  Class
+    # 8  Subclass
+    # 9  Method
+    awk -F'\t' -v OFS='\t' -v m="$mag" '
+        NR>1 && $1!="" {
+            print m, $1, $2, $3, $4, $5, $6, $7, $8, $9
+        }
+    ' "$f" >> "$out"
+
+done
+
+echo "[INFO] Output written to: $out"
+
+#9.2 合并 contig 层 ARG 注释
+echo -e "Sample\tContig\tProtein\tARG\tElement_name\tType\tSubtype\tClass\tSubclass\tMethod" > 13_tables/contig_arg.tsv
+
+for f in 12_contig_level/arg/*.tsv; do
+    sample=$(basename "$f" .tsv)
+
+    awk -F'\t' -v s="$sample" 'NR>1{
+        prot=$1
+        contig=prot
+        sub(/_[0-9]+$/, "", contig)   # 去掉最后一个ORF编号，如 _6
+
+        print s"\t"contig"\t"$1"\t"$2"\t"$3"\t"$5"\t"$6"\t"$7"\t"$8"\t"$9
+    }' OFS='\t' "$f" >> 13_tables/contig_arg.tsv
+done
+
+wait
+
+awk -F'\t' '
+BEGIN{
+    OFS="\t"
+}
+NR==1{next}
+{
+    key=$1"\t"$2   # Sample + Contig
+    sample[key]=$1
+    contig[key]=$2
+
+    if(arglist[key]==""){
+        arglist[key]=$4
+    } else if(arglist[key] !~ "(^|;)"$4"(;|$)"){
+        arglist[key]=arglist[key]";"$4
+    }
+
+    if(classlist[key]==""){
+        classlist[key]=$7
+    } else if(classlist[key] !~ "(^|;)"$7"(;|$)"){
+        classlist[key]=classlist[key]";"$7
+    }
+
+    count[key]++
+}
+END{
+    print "Sample","Contig","ARG_count","ARG_list","Class_list"
+    for(k in count){
+        print sample[k],contig[k],count[k],arglist[k],classlist[k]
+    }
+}' 13_tables/contig_arg.tsv > 13_tables/contig_arg_summary.tsv
+
+#有时候，受限于amrfinder数据库的原因，用这个单一流程做出来的结果不太理想：
+
+#下面是合并amrfinder结果和前面RGI+card结果的流程：
+#对于MAG层面：
+python merge_mag_arg_highconf.py \
+  --amrfinder_dir 10_annotation/arg/amrfinder \
+  --rgi_dir 10_annotation/arg/rgi \
+  --out_merged 13_tables/mag_arg_merged.tsv \
+  --out_highconf 13_tables/mag_arg_highconf.tsv
+#将MAG里面不标准的ARG名称标准化（脚本有bug，有空修QAQ）：
+python standardize_mag_arg_names.py \
+  -i 13_tables/mag_arg_highconf.tsv\
+  -o 13_tables/mag_arg_highconf_std.tsv
+
+#对于contig层面：
+python merge_mag_arg_highconf.py \
+  --amrfinder_dir 12_contig_level/arg \
+  --rgi_dir 12_contig_level/rgi \
+  --out_merged 13_tables/contig_arg_merged.tsv \
+  --out_highconf 13_tables/contig_arg_highconf.tsv
+#将contig里面不标准的ARG名称标准化（脚本有bug，有空修QAQ）：
+python standardize_mag_arg_names.py \
+  -i 13_tables/contig_arg_highconf.tsv \ 
+  -o 13_tables/contig_arg_highconf_std.tsv
+
+#分别得到MAG X ARG 和contig X ARG两张对照表
+
+#9.3 解析 geNomad / IntegronFinder / ISEScan 结果
+#其实contig的mge结果就包含了MAG的mge结果，我们后期通过构建对照表关联起来，不必特意做MAG的mge了
+#合并每个样本contig的mge结果
+mkdir -p 13_tables/mge_parsed
+
+for sample in $(cut -f1 00_meta/samples.tsv | tail -n +2); do
+    python parse_genomad.py \
+      -i 11_mge/genomad/${sample}/final.contigs_summary \
+      -o 13_tables/mge_parsed/${sample}.genomad.tsv
+
+    python parse_integronfinder.py \
+      -i 11_mge/integron/${sample} \
+      -o 13_tables/mge_parsed/${sample}.integron.tsv
+
+    python parse_isescan.py \
+      -i 11_mge/isescan/${sample}/clean_fa \
+      -o 13_tables/mge_parsed/${sample}.isescan.tsv \
+      --detail 13_tables/mge_parsed/${sample}.isescan_detail.tsv
+
+    python merge_mge_tables.py \
+      --genomad 13_tables/mge_parsed/${sample}.genomad.tsv \
+      --integron 13_tables/mge_parsed/${sample}.integron.tsv \
+      --isescan 13_tables/mge_parsed/${sample}.isescan.tsv \
+      -o 13_tables/mge_parsed/${sample}.contig_mge.tsv
+done
+
+#合并所有样本contig的mge结果，得到contig X MGE对照表
+python merge_all_contig_mge.py \
+  -i 13_tables/mge_parsed \
+  -o 13_tables/all_samples.contig_mge.tsv
+
+#MAG丰度对照表
+#coverm的结果第一行存在unmapped的结果，输出结果不标准，要改成标准格式
+
+
+
+#关联arg与mge结果，得到contig X ARG X MGE对照表
+python merge_contig_arg_mge.py \
+  --arg 13_tables/contig_arg_highconf_std.tsv\
+  --mge 13_tables/all_samples.contig_mge.tsv\
+  -o 13_tables/contig_arg_mge.tsv \
+  --summary 13_tables/contig_arg_mge_summary.tsv
+
+
+
+python - <<'PY'
+import pandas as pd
+df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
+print("Loose mobile ARGs:", df["putative_mobile_ARG_loose"].sum())
+print("Strict mobile ARGs:", df["putative_mobile_ARG_strict"].sum())
+print("Total ARG records:", df.shape[0])
+PY
+
+python - <<'PY'
+import pandas as pd
+df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
+res = df.groupby("ARG")[["putative_mobile_ARG_loose","putative_mobile_ARG_strict"]].sum().sort_values("putative_mobile_ARG_strict", ascending=False)
+print(res.head(20))
+PY
+
+#通过以上结果分别获得mag_arg_highconf.tsv, contig_arg_highconf.tsv, 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
