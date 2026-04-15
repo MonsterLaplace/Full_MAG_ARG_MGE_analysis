@@ -1,0 +1,16 @@
+#给contig_arg_mge.tsv添加arg置信度注释
+python - <<'PY'
+import pandas as pd
+df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
+print("Loose mobile ARGs:", df["putative_mobile_ARG_loose"].sum())
+print("Strict mobile ARGs:", df["putative_mobile_ARG_strict"].sum())
+print("Total ARG records:", df.shape[0])
+PY
+
+python - <<'PY'
+import pandas as pd
+df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
+res = df.groupby("ARG")[["putative_mobile_ARG_loose","putative_mobile_ARG_strict"]].sum().sort_values("putative_mobile_ARG_strict", ascending=False)
+print(res.head(20))
+PY
+
