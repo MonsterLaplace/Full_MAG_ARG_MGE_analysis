@@ -68,6 +68,48 @@ conda deactivate
 
 #7.3 ISEScan
 #对每个MAG注释
+#由于软件原因，我们的MAG或者contig的fa文件的表头很复杂：
+#举个例子：
+#>BCLhighgrass01.metaSPAdes.NODE_167_length_21145_cov_4.220721	total_depth=6.92	sample_depths=6.9
+#下划线和其他特殊字符会导致软件报错，需要改成：
+#BCLhighgrass01_bin.11_contig1
+
+#以下是修改流程（contig和MAG均适用）：
+#mkdir 04_assembly/Allcontigs
+#用cat复制所有的contig文件到04_assembly/Allcontigs中，改成如下简单名称：
+#BCLhighgrass01.fa
+#BCLhighgrass02.fa
+
+set -euo pipefail
+
+cd 04_assembly/Allcontigs
+mkdir -p clean_fa id_maps
+
+for f in *.fa *.fasta *.fna; do
+    [ -e "$f" ] || continue
+
+    name=$(basename "$f")
+    base="${name%.*}"
+    out="clean_fa/${base}.clean.fa"
+    map="id_maps/${base}.id_map.tsv"
+
+    awk -v prefix="$base" -v mapfile="$map" '
+    BEGIN{i=0}
+    /^>/{
+        raw=substr($0,2)
+        split(raw, a, /[ \t]/)
+        old=a[1]
+        new=prefix "_contig" ++i
+        print new "\t" old >> mapfile
+        print ">" new
+        next
+    }
+    {print}
+    ' "$f" > "$out"
+
+    echo "Processed: $f -> $out ; map: $map"
+done
+#然后再跑：
 conda activate isescan
 mkdir -p 11_mge/isescan
 
@@ -112,3 +154,13 @@ done
 
 wait
 conda deactivate
+
+#为了和前面两个流程结果对齐，我们这里要把id改回来
+for sample in $(cut -f1 00_meta/samples.tsv | tail -n +2); do
+    python replace_isescan_ids.py \
+      --id_map 04_assembly/Allcontigs/id_maps/${sample}.id_map.tsv \
+      --tsv 11_mge/isescan/${sample}/clean_fa/${sample}.clean.fa.tsv \
+      --gff 11_mge/isescan/${sample}/clean_fa/${sample}.clean.fa.gff \
+      --out_tsv 11_mge/isescan/${sample}/clean_fa/${sample}.clean.fa.fixed.tsv \
+      --out_gff 11_mge/isescan/${sample}/clean_fa/${sample}.clean.fa.fixed.gff
+done
