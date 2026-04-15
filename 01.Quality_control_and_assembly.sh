@@ -6,7 +6,7 @@ CONDA_BASE=$(conda info --base)
 # 1. 指定物种
 SP=Yak
 
-# 2. 指定是谁的样品, 比如李斌的样品则为LB
+# 2. 指定是谁的样品
 BL=YYG
 
 # 3.指定原始rawData数据存放目录
@@ -73,7 +73,7 @@ do
 	2>${fastQC}/${LOG}/${FID}.rawData.${DATE}.err &
 done
 
-# 使用fastp进行质控
+# 使用fastp进行质控，并行12个
 parallel=12
 count=0
 for FID in $filenames
@@ -141,7 +141,7 @@ bwa-mem2 index \
 	1>${HG}/${LOG}/buildBWAindex.${SP}.${BL}.${DATE}.log \
 	2>${HG}/${LOG}/buildBWAindex.${SP}.${BL}.${DATE}.err &&
 
-# 3. bwa比对,剔除宿主基因组污染
+# 3. bwa比对,剔除宿主基因组污染，并行3个
 mkdir -p ${WP}/02.bwa.mapping/02.01.bwa.samFile/ && \
 mkdir -p ${WP}/02.bwa.mapping/02.02.bwa.sortedBamFile/ && \
 BSAM=${WP}/02.bwa.mapping/02.01.bwa.samFile
@@ -166,7 +166,7 @@ done
 wait
 echo "bwa mapping process finished"
 
-# 使用samtools将sam文件转换为bam文件, 并排序.
+# 使用samtools将sam文件转换为bam文件, 并排序. 并行12个.
 parallel=12
 count=0
 
@@ -181,7 +181,7 @@ do
 done
 wait
 
-# 使用samtools对bam文件进行索引.
+# 使用samtools对bam文件进行索引. 并行12个.
 parallel=12
 count=0
 for FID in $filenames
@@ -198,7 +198,7 @@ echo "sam2bam and sorted process finished"
 
 # 删除无用的过程数据
 rm -rf ${BSAM}/*.bwa.sam
-# 使用samtools提取未必对上的所有序列, 用于后续宏基因组分析
+# 使用samtools提取未必对上的所有序列, 用于后续宏基因组分析. 并行6个.
 mkdir -p ${WP}/02.bwa.mapping/02.03.hostFree/ && \
 HF=${WP}/02.bwa.mapping/02.03.hostFree
 parallel=6
@@ -217,7 +217,7 @@ done
 wait
 echo "extract unmapped data finished, processing merge"
 
-# 使用samtools对未比对上的所有序列进行合并, 排序, 并提取fastq序列
+# 使用samtools对未比对上的所有序列进行合并, 排序, 并提取fastq序列. 并行12个.
 parallel=12
 count=0
 for FID in $filenames
@@ -252,7 +252,7 @@ do
 done
 wait
 
-# 使用bedtools从bam文件中提取fastq序列
+# 使用bedtools从bam文件中提取fastq序列. 并行12个.
 mkdir -p ${WP}/03.hostFreeData/
 HFFAST=${WP}/03.hostFreeData
 parallel=12
@@ -272,7 +272,7 @@ done
 wait
 echo "extract hostFree fq file finished"
 
-#提取能够比对上宿主的fq序列, 如果需要, 请将以下注释删除.
+#提取能够比对上宿主的fq序列, 如果需要, 请将以下注释删除. 并行12个.
 ####################################################
 mkdir -p ${WP}/04.onlyHostData/
 OH=${WP}/04.onlyHostData
@@ -296,7 +296,7 @@ do
 done
 wait
 
-# 使用bedtools从bam文件中提取fastq序列
+# 使用bedtools从bam文件中提取fastq序列. 并行12个.
 parallel=12
 count=0
 for FID in $filenames
