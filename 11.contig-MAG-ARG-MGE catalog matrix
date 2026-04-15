@@ -1,1 +1,23 @@
+#11.利用前面09和10中的对照表生成最终的统计结果对照表
+python build_mag_arg_mge_catalog.py \
+  --contig_to_repMAG 13_tables/contig_to_repMAG.tsv \
+  --contig_arg_mge 13_tables/contig_arg_mge.tsv \
+  --mag_arg_highconf 13_tables/mag_arg_highconf.tsv \
+  --out_mag_arg_catalog 13_tables/mag_arg_catalog.tsv \
+  --out_mag_mge_catalog 13_tables/mag_mge_catalog.tsv \
+  --out_arg_mge_mag_edges 13_tables/arg_mge_mag_edges.tsv \
+  --out_mag_trait_catalog 13_tables/mag_trait_catalog.tsv \
+  --out_all_mag_trait_catalog 13_tables/all.mag_trait_catalog.tsv \
+  --out_unmapped_contig_arg_mge 13_tables/unmapped_contig_arg_mge.tsv \
+  --out_mapping_summary 13_tables/mapping_summary.tsv
+
+#将CAZYmes和VFDB的结果整合进all.mag_trait_catalog.tsv中
+#提取dncan的结果
+python3 extract_mag_cazy_from_dbcan.py
+#整合CAZYmes和vfdb结果
+python merge_vfdb_cazy_to_mag_trait_catalog.py \
+  -i 13_tables/all.mag_trait_catalog.tsv \
+  -v 10_annotation/vfdb \
+  -c 10_annotation/cazy_summary/mag_cazy_catalog.tsv \
+  -o 13_tables/mag_trait_catalog.with_vfdb_cazy.tsv
 
