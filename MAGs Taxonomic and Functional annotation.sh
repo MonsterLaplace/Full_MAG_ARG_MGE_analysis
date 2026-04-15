@@ -1,0 +1,31 @@
+#2.5 GTDB-Tk 分类注释
+conda activate gtdbtk
+mkdir -p 08_gtdbtk
+
+gtdbtk classify_wf \
+  --genome_dir 07_drep/out/dereplicated_genomes \
+  --out_dir 08_gtdbtk \
+  --cpus 32
+conda deactivate
+
+#2.6 Bakta 注释每个 MAG
+conda activate bakta
+mkdir -p 10_annotation/bakta
+
+for fa in 07_drep/out/dereplicated_genomes/*.fa; do
+  id=$(basename "$fa" .fa)
+  bakta --db /path/to/bakta_db \
+    --threads 16 \
+    --output "10_annotation/bakta/${id}" \
+    --prefix "${id}" \
+    "$fa"
+done
+conda deactivate
+#输出里会有：
+#          *.faa 蛋白序列
+#          *.ffn
+#          *.gff3
+#把蛋白汇总：
+mkdir -p 10_annotation/proteins
+find 10_annotation/bakta -name "*.faa" -exec cp {} 10_annotation/proteins/ \;
+
