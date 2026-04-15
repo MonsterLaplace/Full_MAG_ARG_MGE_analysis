@@ -1,0 +1,30 @@
+#8. contig 与 MAG 的对应关系
+#为了做 “ARG–MGE–MAG” 整合，需要知道 contig 属于哪个 MAG。
+#如果你有 binning 结果，一般有 contig 到 bin 的映射。若没有，自己从 fasta header 建。
+#假设每个 bin fasta 包含原 contig header，则可生成：
+mkdir -p 13_tables
+
+for fa in 05_bins_raw/*.fa; do
+  bin=$(basename "$fa" .fa)
+  grep "^>" "$fa" | sed 's/^>//' | awk -v b="$bin" '{print $1"\t"b}'
+done > 13_tables/contig_to_bin.tsv
+
+#若你最终用的是 dRep 后 non-redundant MAG，需要建立：
+
+#raw bin -> representative MAG
+#contig -> raw bin -> rep MAG
+#dRep 的 Cdb.csv 可辅助对应。
+python make_contig_to_rawbin.py \
+  -i 05_bins_raw \
+  -o 13_tables/contig_to_rawbin.tsv \
+  --sample_regex '^([^.]+_bin)'
+
+python make_contig_to_repMAG.py \
+  --contig_to_rawbin 13_tables/contig_to_rawbin.tsv \
+  --bin_to_repMAG 13_tables/bin_to_repMAG.tsv \
+  -o 13_tables/contig_to_repMAG.tsv
+
+python make_bin_to_repMAG_from_drep.py \
+  --cdb 07_drep/out/data_tables/Cdb.csv \
+  --wdb 07_drep/out/data_tables/Wdb.csv \
+  -o 13_tables/bin_to_repMAG.tsv
