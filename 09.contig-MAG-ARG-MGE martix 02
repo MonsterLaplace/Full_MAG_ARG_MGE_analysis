@@ -1,4 +1,4 @@
-#给contig_arg_mge.tsv添加arg置信度注释
+#9.5 给contig_arg_mge.tsv添加arg置信度注释并统计结果
 python - <<'PY'
 import pandas as pd
 df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
@@ -13,4 +13,11 @@ df = pd.read_csv("13_tables/contig_arg_mge.tsv", sep="\t")
 res = df.groupby("ARG")[["putative_mobile_ARG_loose","putative_mobile_ARG_strict"]].sum().sort_values("putative_mobile_ARG_strict", ascending=False)
 print(res.head(20))
 PY
+
+#9.6 生成contig X MAG X MGE的对照表
+python merge_contig_arg_mge.py \
+  --arg 13_tables/contig_arg_highconf_std.tsv \
+  --mge 13_tables/all_samples.contig_mge.tsv \
+  -o 13_tables/contig_arg_mge.tsv \
+  --summary 13_tables/contig_arg_mge_summary.tsv
 
