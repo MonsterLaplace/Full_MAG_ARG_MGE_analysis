@@ -224,7 +224,7 @@ bins_count=$(find "$bins_dir" -name "*.fa" | wc -l)
 # 计算需要的批次数量
 num_batches=$(($bins_count / 1000 + 1))
 
-# 对每个批次的 bins 文件执行 CheckM
+# 对每个批次的 bins 文件执行 CheckM2
 for i in $(seq 1 $num_batches); do
     batch_bins_dir="$bins_dir/batch_$i"
     mkdir -p "$batch_bins_dir"
@@ -233,6 +233,6 @@ for i in $(seq 1 $num_batches); do
     mkdir -p "$output_batch_dir"
     checkm2 predict --threads 128 -x fa --force --input "$batch_bins_dir" --output-directory "$output_batch_dir"
 done
-
+#这里也可换成checkm
 #checkm lineage_wf -t 128 -x fa --pplacer_threads 32 "$batch_bins_dir" "$output_batch_dir"
 conda deactivate
