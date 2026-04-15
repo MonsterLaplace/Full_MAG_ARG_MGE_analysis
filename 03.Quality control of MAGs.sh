@@ -45,8 +45,12 @@ checkm2 predict \
   --input 05_bins_raw/ \
   --output-directory 06_mag_qc/checkm2 \
   --threads 32
+
+conda deactivate
 #输出核心表通常在：quality_report.tsv  
+
 #2.2 GUNC 污染检查
+conda activate gunc
 mkdir -p 06_mag_qc/gunc
 gunc run \
   --input_dir 05_bins_raw \
@@ -54,6 +58,7 @@ gunc run \
   --threads 32 \
   -r /path/to/gnucdb/gunc_db_progenomes2.1.dmnd
   mkdir -p 06_mag_qc/selected
+conda deactivate
 
 awk -F'\t' 'NR==1 || ($2>=70 && $3<=5)' 06_mag_qc/checkm2/quality_report.tsv > 06_mag_qc/high_quality.tsv
 cut -f1 06_mag_qc/high_quality.tsv | tail -n +2 > 06_mag_qc/high_quality_ids.txt
@@ -72,9 +77,11 @@ while read id; do
 done < 06_mag_qc/high_quality_ids.txt
 #如果 GUNC 有可疑污染 bins，再排掉。
 #2.4 dRep 去冗余形成非冗余 MAG catalog
+conda activate dRep
 mkdir -p 07_drep
 dRep dereplicate 07_drep/out \
   -g 06_mag_qc/selected/*.fa \
   -p 32 \
   -comp 70 -con 5 \
   -sa 0.95
+conda deactivate
