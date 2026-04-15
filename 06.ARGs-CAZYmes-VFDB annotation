@@ -1,0 +1,97 @@
+# 4. ARG 注释：MAG 层面 + contig 层面
+4.1 用 AMRFinderPlus 注释蛋白
+#蛋白层面：
+conda activate amrfinder
+mkdir -p 10_annotation/arg/amrfinder
+
+for faa in 10_annotation/proteins/*.faa; do
+  id=$(basename "$faa" .faa)
+  amrfinder -p "$faa" \
+    -o "10_annotation/arg/amrfinder/${id}.tsv" \
+    --threads 8
+done
+#核酸层面：
+for fa in 07_drep/out/dereplicated_genomes/*.fa; do
+  id=$(basename "$fa" .fa)
+  amrfinder -n "$fa" \
+    -o "10_annotation/arg/amrfinder/${id}.nuc.tsv" \
+    --threads 8
+done
+conda deactivate
+#4.2 用 RGI + CARD 交叉验证
+conda activate rgi
+mkdir -p 10_annotation/arg/rgi
+
+for faa in 10_annotation/proteins/*.faa; do
+  id=$(basename "$faa" .faa)
+  rgi main \
+    --input_sequence "$faa" \
+    --output_file "10_annotation/arg/rgi/${id}" \
+    --input_type protein \
+    --alignment_tool DIAMOND \
+    --num_threads 8 \
+    --include_loose
+done
+conda deactivate
+#4.3 contig 层面 ORF 预测并注释 ARG
+#直接对 contigs 做 ORF 预测。
+#每个样本 contigs 在：
+conda activate prodigal
+04_assembly/{sample}/final.contigs.fa
+mkdir -p 12_contig_level/prodigal
+
+for fa in 04_assembly/*/final.contigs.fa; do
+  sample=$(basename $(dirname "$fa"))
+  prodigal -i "$fa" \
+    -a "12_contig_level/prodigal/${sample}.faa" \
+    -d "12_contig_level/prodigal/${sample}.ffn" \
+    -o "12_contig_level/prodigal/${sample}.gff" \
+    -p meta
+done
+conda deactivate
+#再跑 AMRFinderPlus：
+conda activate amrfinder
+mkdir -p 12_contig_level/arg
+
+for faa in 12_contig_level/prodigal/*.faa; do
+  sample=$(basename "$faa" .faa)
+  amrfinder -p "$faa" \
+    -o "12_contig_level/arg/${sample}.tsv" \
+    --threads 8
+done
+conda deactivate
+
+#5. CAZy 注释
+#5.1 对 MAG 蛋白跑 dbCAN
+conda activate dbcan
+mkdir -p 10_annotation/cazy
+
+for faa in 10_annotation/proteins/*.faa; do
+  id=$(basename "$faa" .faa)
+    run_dbcan CAZyme_annotation \
+    --input_raw_data $faa  \
+    --mode protein \
+    --output_dir 10_annotation/cazy/${id} \
+    --threads 16  \
+    --db_dir /data/xb/MAG/db
+done
+conda deactivate
+#后续提取 overview.txt
+#6. VFDB 注释
+conda activate diamond
+#下载vfdb数据库
+wget https://www.mgc.ac.cn/VFs/Down/VFDB_setB_pro.fas.gz
+diamond makedb --in VFDB_setB_pro.fas -d VFDB
+
+mkdir -p 10_annotation/vfdb
+
+for faa in 10_annotation/proteins/*.faa; do
+  id=$(basename "$faa" .faa)
+  diamond blastp \
+    -d /path/to/VFDB.dmnd \
+    -q "$faa" \
+    -o "10_annotation/vfdb/${id}.tsv" \
+    -e 1e-10 -k 1 -p 8 \
+    --id 70 --query-cover 70
+done
+conda deactivate
