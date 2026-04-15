@@ -290,10 +290,10 @@ gtdb <- fread("08_gtdbtk/classification_pplacer.tsv") %>% as.data.frame()
 check_required_cols(gtdb, c("user_genome", "classification"), "classification_pplacer.tsv")
 colnames(gtdb)[colnames(gtdb) == "user_genome"] <- "MAG"
 
-if (!file.exists("13_tables/mag_trait_catalog.tsv")) {
-  stop("mag_trait_catalog.tsv is required in this workflow.")
+if (!file.exists("13_tables/all.mag_trait_catalog.tsv")) {
+  stop("all.mag_trait_catalog.tsv is required in this workflow.")
 }
-mag_trait <- fread("13_tables/mag_trait_catalog.tsv") %>% as.data.frame()
+mag_trait <- fread("13_tables/all.mag_trait_catalog.tsv") %>% as.data.frame()
 if (!"MAG" %in% colnames(mag_trait)) colnames(mag_trait)[1] <- "MAG"
 
 ###############################
