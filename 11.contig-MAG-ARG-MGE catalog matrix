@@ -19,5 +19,5 @@ python merge_vfdb_cazy_to_mag_trait_catalog.py \
   -i 13_tables/all.mag_trait_catalog.tsv \
   -v 10_annotation/vfdb \
   -c 10_annotation/cazy_summary/mag_cazy_catalog.tsv \
-  -o 13_tables/mag_trait_catalog.with_vfdb_cazy.tsv
+  -o 13_tables/all.mag_trait_catalog.with_vfdb_cazy.tsv
 
