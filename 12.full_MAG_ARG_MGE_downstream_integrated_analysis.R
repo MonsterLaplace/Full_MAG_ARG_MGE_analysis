@@ -1,5 +1,5 @@
 ###############################
-## Full customized R workflow v4
+## Full customized R workflow v4.2
 ## For representative MAG + ARG + MGE analysis
 ## Dataset: Yak vs White-lipped deer
 ###############################
@@ -386,15 +386,15 @@ plot_box_jitter(resistome_alpha, "season", "ARG_burden", "season", "R_out/fig/re
 ###############################
 
 arg_bray <- vegan::vegdist(arg_rel, method = "bray")
-arg_pcoa <- cmdscale(arg_bray, k = 2, eig = TRUE)
-
+arg_pcoa <- ape::pcoa(arg_bray)
 arg_pcoa_df <- data.frame(
   sample = rownames(arg_rel),
-  PC1 = arg_pcoa$points[,1],
-  PC2 = arg_pcoa$points[,2]
-) %>% left_join(meta, by = "sample")
-
-
+  PC1 = arg_pcoa$vectors[,1],
+  PC2 = arg_pcoa$vectors[,2]
+) %>% 
+  left_join(meta, by = "sample")
+pc1_exp <- round(arg_pcoa$values$Relative_eig[1] * 100, 2)
+pc2_exp <- round(arg_pcoa$values$Relative_eig[2] * 100, 2)
 p_arg_pcoa <- ggplot(arg_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
   geom_point(size = 3, alpha = 0.9) +
   stat_ellipse(
@@ -402,6 +402,10 @@ p_arg_pcoa <- ggplot(arg_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
     aes(PC1, PC2, color = host, group = host),
     inherit.aes = FALSE,
     level = 0.95
+  ) +
+  labs(
+    x = paste0("PCoA1 (", pc1_exp, "%)"),
+    y = paste0("PCoA2 (", pc2_exp, "%)")
   ) +
   theme_bw()
 
@@ -486,22 +490,26 @@ if ("Maaslin2" %in% loadedNamespaces()) {
 mag_bray <- vegan::vegdist(mag_rel, method = "bray")
 mag_pcoa <- cmdscale(mag_bray, k = 2, eig = TRUE)
 
+eig_prop <- mag_pcoa$eig / sum(mag_pcoa$eig[mag_pcoa$eig > 0])
+
 mag_pcoa_df <- data.frame(
   sample = rownames(mag_rel),
   PC1 = mag_pcoa$points[,1],
   PC2 = mag_pcoa$points[,2]
-) %>% left_join(meta, by = "sample")
+) %>% 
+  left_join(meta, by = "sample")
 
 p_mag_pcoa <- ggplot(mag_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
   geom_point(size = 3, alpha = 0.9) +
   stat_ellipse(
-    data = mag_pcoa_df,
-    aes(PC1, PC2, color = host, group = host),
-    inherit.aes = FALSE,
+    aes(group = host),
     level = 0.95
   ) +
+  labs(
+    x = sprintf("PCoA1 (%.2f%%)", eig_prop[1] * 100),
+    y = sprintf("PCoA2 (%.2f%%)", eig_prop[2] * 100)
+  ) +
   theme_bw()
-
 
 ggsave("R_out/fig/MAG_PCoA_bray.pdf", p_mag_pcoa, width = 6, height = 5)
 
