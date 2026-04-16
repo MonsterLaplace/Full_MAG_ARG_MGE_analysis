@@ -17,7 +17,7 @@ phylophlan \
      --output_folder 08_gtdbtk/phylophlan_output/ \
      -d phylophlan \
      --diversity high \
-     -f /data/xb/metagenome/13.tree/config/faatree.cfg \
+     -f /path/to/config/faatree.cfg \
      --nproc 120 \
      -t a \
     --fast \
