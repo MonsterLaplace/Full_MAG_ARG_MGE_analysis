@@ -103,13 +103,13 @@ group_counts <- function(group_vec){
   table(as.character(group_vec), useNA = "no")
 }
 
-safe_wilcox_by_group <- function(df, value_col, group_col, out_txt = NULL, context = "", verbose = FALSE){
+safe_wilcox_by_group <- function(df, value_col, group_col, out_txt = NULL, context = ""){
   tmp <- df[, c(value_col, group_col), drop = FALSE]
   tmp <- tmp[complete.cases(tmp), , drop = FALSE]
 
   if(nrow(tmp) == 0){
     msg <- paste0("Skipping ", context, ": no complete cases.")
-    if(verbose) message(msg)
+    warning(msg)
     if(!is.null(out_txt)) writeLines(msg, out_txt)
     return(NULL)
   }
@@ -119,14 +119,14 @@ safe_wilcox_by_group <- function(df, value_col, group_col, out_txt = NULL, conte
 
   if(length(unique(g)) != 2){
     msg <- paste0("Skipping ", context, ": ", group_col, " does not contain exactly two groups.")
-    if(verbose) message(msg)
+    warning(msg)
     if(!is.null(out_txt)) writeLines(msg, out_txt)
     return(NULL)
   }
 
   if(length(unique(v)) <= 1 || stats::sd(v, na.rm = TRUE) == 0){
     msg <- paste0("Skipping ", context, ": ", value_col, " has zero variance.")
-    if(verbose) message(msg)
+    warning(msg)
     if(!is.null(out_txt)) writeLines(msg, out_txt)
     return(NULL)
   }
@@ -138,7 +138,7 @@ safe_wilcox_by_group <- function(df, value_col, group_col, out_txt = NULL, conte
 
   if(inherits(wt, "error")){
     msg <- paste0("Skipping ", context, ": wilcox.test failed for ", value_col, " ~ ", group_col, "; ", wt$message)
-    if(verbose) message(msg)
+    warning(msg)
     if(!is.null(out_txt)) writeLines(msg, out_txt)
     return(NULL)
   }
@@ -290,10 +290,10 @@ gtdb <- fread("08_gtdbtk/classification_pplacer.tsv") %>% as.data.frame()
 check_required_cols(gtdb, c("user_genome", "classification"), "classification_pplacer.tsv")
 colnames(gtdb)[colnames(gtdb) == "user_genome"] <- "MAG"
 
-if (!file.exists("13_tables/all.mag_trait_catalog.tsv")) {
-  stop("all.mag_trait_catalog.tsv is required in this workflow.")
+if (!file.exists("13_tables/mag_trait_catalog.tsv")) {
+  stop("mag_trait_catalog.tsv is required in this workflow.")
 }
-mag_trait <- fread("13_tables/all.mag_trait_catalog.tsv") %>% as.data.frame()
+mag_trait <- fread("13_tables/mag_trait_catalog.tsv") %>% as.data.frame()
 if (!"MAG" %in% colnames(mag_trait)) colnames(mag_trait)[1] <- "MAG"
 
 ###############################
@@ -370,7 +370,7 @@ resistome_alpha <- data.frame(
   sample = rownames(arg_mat),
   ARG_burden = rowSums(arg_mat),
   ARG_richness = rowSums(arg_mat > 0),
-  ARG_shannon = diversity(arg_mat, index = "shannon")
+  ARG_shannon =vegan::diversity(arg_mat, index = "shannon")
 ) %>%
   left_join(meta, by = "sample")
 
@@ -385,7 +385,7 @@ plot_box_jitter(resistome_alpha, "season", "ARG_burden", "season", "R_out/fig/re
 ## 9. Resistome beta diversity
 ###############################
 
-arg_bray <- vegdist(arg_rel, method = "bray")
+arg_bray <- vegan::vegdist(arg_rel, method = "bray")
 arg_pcoa <- cmdscale(arg_bray, k = 2, eig = TRUE)
 
 arg_pcoa_df <- data.frame(
@@ -393,6 +393,7 @@ arg_pcoa_df <- data.frame(
   PC1 = arg_pcoa$points[,1],
   PC2 = arg_pcoa$points[,2]
 ) %>% left_join(meta, by = "sample")
+
 
 p_arg_pcoa <- ggplot(arg_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
   geom_point(size = 3, alpha = 0.9) +
@@ -407,8 +408,8 @@ p_arg_pcoa <- ggplot(arg_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
 ggsave("R_out/fig/resistome_PCoA_bray.pdf", p_arg_pcoa, width = 6, height = 5)
 
 arg_euc <- dist(arg_clr)
-perm_arg_bray <- adonis2(arg_bray ~ host * season, data = meta, permutations = 999)
-perm_arg_euc  <- adonis2(arg_euc ~ host * season, data = meta, permutations = 999)
+perm_arg_bray <- vegan::adonis2(arg_bray ~ host * season, data = meta, permutations = 999)
+perm_arg_euc  <- vegan::adonis2(arg_euc ~ host * season, data = meta, permutations = 999)
 
 capture.output(perm_arg_bray, file = "R_out/tab/resistome_PERMANOVA_bray.txt")
 capture.output(perm_arg_euc, file = "R_out/tab/resistome_PERMANOVA_aitchison.txt")
@@ -449,6 +450,8 @@ Heatmap(
 )
 dev.off()
 
+
+
 ###############################
 ## 11. Differential ARG (MaAsLin2)
 ###############################
@@ -480,7 +483,7 @@ if ("Maaslin2" %in% loadedNamespaces()) {
 ## 12. MAG community analysis
 ###############################
 
-mag_bray <- vegdist(mag_rel, method = "bray")
+mag_bray <- vegan::vegdist(mag_rel, method = "bray")
 mag_pcoa <- cmdscale(mag_bray, k = 2, eig = TRUE)
 
 mag_pcoa_df <- data.frame(
@@ -499,9 +502,10 @@ p_mag_pcoa <- ggplot(mag_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
   ) +
   theme_bw()
 
+
 ggsave("R_out/fig/MAG_PCoA_bray.pdf", p_mag_pcoa, width = 6, height = 5)
 
-perm_mag_bray <- adonis2(mag_bray ~ host * season, data = meta, permutations = 999)
+perm_mag_bray <- vegan::adonis2(mag_bray ~ host * season, data = meta, permutations = 999)
 capture.output(perm_mag_bray, file = "R_out/tab/MAG_PERMANOVA_bray.txt")
 
 ###############################
@@ -597,25 +601,7 @@ if (!is.null(maas_mag_host) && nrow(maas_mag_host) > 0) {
 }
 
 ###############################
-## 17. Group overview tables
-###############################
-
-mag_info2$ARG_host_group <- ifelse(mag_info2$is_ARG_host, "ARG_host_MAG", "non_ARG_host_MAG")
-
-arg_host_group_tab <- data.frame(
-  group = names(table(mag_info2$ARG_host_group)),
-  n = as.integer(table(mag_info2$ARG_host_group))
-)
-write.csv(arg_host_group_tab, "R_out/tab/ARG_host_group_overview.csv", row.names = FALSE)
-
-host_enrich_tab <- data.frame(
-  group = names(table(mag_info2$host_enrichment)),
-  n = as.integer(table(mag_info2$host_enrichment))
-)
-write.csv(host_enrich_tab, "R_out/tab/host_enrichment_overview.csv", row.names = FALSE)
-
-###############################
-## 18. Risk score
+## 17. Risk score
 ###############################
 
 for (cc in c("ARG_count", "mobile_ARG_loose_count", "mobile_ARG_strict_count",
@@ -663,13 +649,15 @@ if(nrow(top20) > 0){
 }
 
 ###############################
-## 19. ARG host vs non-ARG host MGE comparison
+## 18. ARG host vs non-ARG host MGE comparison
 ###############################
 
 mge_test_cols <- intersect(c("mobile_ARG_loose_count", "mobile_ARG_strict_count",
                              "plasmid_like_contig_count", "integrase_contig_count",
                              "IS_contig_count", "transposase_total"),
                            colnames(mag_info2))
+
+mag_info2$ARG_host_group <- ifelse(mag_info2$is_ARG_host, "ARG_host_MAG", "non_ARG_host_MAG")
 
 write.csv(
   data.frame(group = names(group_counts(mag_info2$ARG_host_group)),
@@ -687,8 +675,7 @@ for (cc in mge_test_cols) {
     value_col = cc,
     group_col = "ARG_host_group",
     out_txt = out_file,
-    context = cc,
-    verbose = FALSE
+    context = cc
   )
 
   if(!is.null(wt)){
@@ -708,7 +695,7 @@ for (cc in mge_test_cols) {
 }
 
 ###############################
-## 19A. CAZy functional coupling analysis
+## 18A. CAZy functional coupling analysis
 ###############################
 
 cazy_total_cols <- intersect(c("CAZy_count", "CAZyme_count", "cazy_count"), colnames(mag_info2))
@@ -746,8 +733,7 @@ if(length(cazy_total_cols) > 0){
       value_col = cazy_total_col,
       group_col = "ARG_host_group",
       out_txt = "R_out/tab/wilcox_CAZy_ARGhost_vs_nonARGhost.txt",
-      context = "ARG-host vs non-ARG-host CAZy comparison",
-      verbose = FALSE
+      context = "ARG-host vs non-ARG-host CAZy comparison"
     )
 
     p_cazy1 <- ggplot(cazy_compare1,
@@ -812,7 +798,7 @@ if(length(cazy_total_cols) > 0){
 
   } else {
     msg <- "Skipping ARG-host vs non-ARG-host CAZy comparison: only one ARG_host_group present."
-    message(msg)
+    warning(msg)
     writeLines(msg, "R_out/tab/CAZy_ARGhost_vs_nonARGhost_skipped.txt")
   }
 
@@ -839,8 +825,7 @@ if(length(cazy_total_cols) > 0){
       value_col = cazy_total_col,
       group_col = "host_enrichment",
       out_txt = "R_out/tab/wilcox_CAZy_host_enriched_ARGhost.txt",
-      context = "host-enriched ARG-host CAZy comparison",
-      verbose = FALSE
+      context = "host-enriched ARG-host CAZy comparison"
     )
 
     p_cazy2 <- ggplot(cazy_compare2,
@@ -905,18 +890,18 @@ if(length(cazy_total_cols) > 0){
 
   } else {
     msg <- "Skipping host-enriched ARG-host CAZy comparison: not enough yak/deer enriched ARG-host MAGs."
-    message(msg)
+    warning(msg)
     writeLines(msg, "R_out/tab/CAZy_host_enriched_ARGhost_skipped.txt")
   }
 
 } else {
   msg <- "No CAZy total column detected in mag_info2. Skip CAZy functional coupling analysis."
-  message(msg)
+  warning(msg)
   writeLines(msg, "R_out/tab/CAZy_analysis_skipped.txt")
 }
 
 ###############################
-## 19B. VFDB coupling analysis
+## 18B. VFDB coupling analysis
 ###############################
 
 vf_cols_main <- intersect(c("vfdb_hit_count", "vfdb_gene_count", "vfdb_vfg_count"), colnames(mag_info2))
@@ -964,9 +949,8 @@ if(length(vf_cols_main) > 0){
     vf_res1$q_value <- p.adjust(vf_res1$p_value, method = "BH")
     write.csv(vf_res1, "R_out/tab/VFDB_ARGhost_vs_nonARGhost.csv", row.names = FALSE)
   } else {
-    msg <- "Skipping VFDB ARG-host vs non-ARG-host comparison: only one ARG_host_group present."
-    message(msg)
-    writeLines(msg, "R_out/tab/VFDB_ARGhost_vs_nonARGhost_skipped.txt")
+    writeLines("Skipping VFDB ARG-host vs non-ARG-host comparison: only one ARG_host_group present.",
+               "R_out/tab/VFDB_ARGhost_vs_nonARGhost_skipped.txt")
   }
 
   vf_compare2 <- mag_info2 %>%
@@ -1010,14 +994,13 @@ if(length(vf_cols_main) > 0){
     vf_res2$q_value <- p.adjust(vf_res2$p_value, method = "BH")
     write.csv(vf_res2, "R_out/tab/VFDB_host_enriched_ARGhost.csv", row.names = FALSE)
   } else {
-    msg <- "Skipping VFDB host-enriched ARG-host comparison: not enough yak/deer enriched ARG-host MAGs."
-    message(msg)
-    writeLines(msg, "R_out/tab/VFDB_host_enriched_ARGhost_skipped.txt")
+    writeLines("Skipping VFDB host-enriched ARG-host comparison: not enough yak/deer enriched ARG-host MAGs.",
+               "R_out/tab/VFDB_host_enriched_ARGhost_skipped.txt")
   }
 }
 
 ###############################
-## 20. Random forest
+## 19. Random forest
 ###############################
 
 arg_prev <- colMeans(arg_mat > 0)
@@ -1071,7 +1054,7 @@ if("ARGHOST" %in% names(rf_results)){
 }
 
 ###############################
-## 21. Linear models
+## 20. Linear models
 ###############################
 
 sample_metrics <- resistome_alpha %>%
@@ -1088,7 +1071,7 @@ capture.output(summary(m3), file = "R_out/tab/lm_ARG_shannon_host_season.txt")
 capture.output(summary(m4), file = "R_out/tab/lm_ARGhost_abundance_host_season.txt")
 
 ###############################
-## 22. ARG-MAG bipartite network
+## 21. ARG-MAG bipartite network
 ###############################
 
 mag_arg_edges <- mag_arg %>%
@@ -1130,11 +1113,11 @@ if (nrow(net_edges) > 0) {
     scale_color_manual(values = c("MAG" = "#1f78b4", "ARG" = "#e31a1c")) +
     theme_void()
 
-  ggsave("R_out/fig/network_ARG_MAG_bipartite.pdf", p_net, width = 10, height = 8)
+    ggsave("R_out/fig/network_ARG_MAG_bipartite.pdf", p_net, width = 10, height = 8)
 }
 
 ###############################
-## 23. ARG-MGE-MAG tripartite network
+## 22. ARG-MGE-MAG tripartite network
 ###############################
 
 if (file.exists("13_tables/arg_mge_mag_edges.tsv")) {
@@ -1173,7 +1156,7 @@ if (file.exists("13_tables/arg_mge_mag_edges.tsv")) {
 }
 
 ###############################
-## 24. MAG trait correlation
+## 23. MAG trait correlation
 ###############################
 
 trait_cols <- intersect(c("ARG_count", "mobile_ARG_strict_count", "mobile_ARG_loose_count",
@@ -1198,10 +1181,10 @@ if(length(trait_cols) >= 2){
 }
 
 ###############################
-## 25. Optional phylogenetic tree
+## 24. Optional phylogenetic tree
 ###############################
 
-tree_file1 <- "08_gtdbtk/bac120.decorated.tree"
+tree_file1 <- "08_gtdbtk/phylophlan.tree"
 
 if ("ggtree" %in% loadedNamespaces() && file.exists(tree_file1)) {
   tree <- ape::read.tree(tree_file1)
@@ -1226,7 +1209,7 @@ if ("ggtree" %in% loadedNamespaces() && file.exists(tree_file1)) {
 }
 
 ###############################
-## 26. Save objects
+## 25. Save objects
 ###############################
 
 saveRDS(meta, "R_out/rds/meta.rds")
