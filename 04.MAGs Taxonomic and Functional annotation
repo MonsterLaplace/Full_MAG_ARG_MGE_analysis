@@ -9,7 +9,26 @@ gtdbtk classify_wf \
 conda deactivate
 cat gtdbtk.ar53.summary.tsv gtdbtk.bac120.summary.tsv > classification_pplacer.tsv
 
-#2.6 Bakta 注释每个 MAG
+#2.6 MAG系统发育关系
+conda activate phylophlan
+mkdir 08_gtdbtk/phylophlan_output/
+phylophlan \
+     --input_folder 07_drep/out/dereplicated_genomes/ \
+     --output_folder 08_gtdbtk/phylophlan_output/ \
+     -d phylophlan \
+     --diversity high \
+     -f /data/xb/metagenome/13.tree/config/faatree.cfg \
+     --nproc 120 \
+     -t a \
+    --fast \
+    --force_nucleotides \
+    --genome_extension ".fa" \
+   --min_num_markers 70 \
+     -i wgt 2>&1 | tee phylophlan.log
+conda deactivate
+cat 08_gtdbtk/phylophlan_output/wgt_phylophlan/RAxML_bestTree.wgt_refined.tre > 08_gtdbtk/phylophlan.tree
+
+#2.7 Bakta 注释每个 MAG
 conda activate bakta
 mkdir -p 10_annotation/bakta
 
