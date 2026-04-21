@@ -1,7 +1,8 @@
 ###############################
-## Full customized R workflow v4.2
+## Full customized R workflow v4.3
 ## For representative MAG + ARG + MGE analysis
 ## Dataset: Yak vs White-lipped deer
+## Beautified/updated version with smart boxplots
 ###############################
 
 rm(list = ls())
@@ -14,7 +15,7 @@ options(stringsAsFactors = FALSE)
 pkg_needed <- c(
   "tidyverse", "data.table", "vegan", "ggrepel", "pheatmap",
   "ComplexHeatmap", "circlize", "randomForest", "pROC",
-  "igraph", "ggraph", "ape"
+  "igraph", "ggraph", "ape", "scales"
 )
 
 for (p in pkg_needed) {
@@ -170,6 +171,192 @@ filter_nonzero_sd_cols <- function(df){
   df[, keep, drop = FALSE]
 }
 
+should_use_log1p <- function(x,
+                             require_nonnegative = TRUE,
+                             zero_fraction_threshold = 0.1,
+                             ratio_threshold = 20,
+                             quantile_ratio_threshold = 10,
+                             verbose = FALSE) {
+
+  x <- x[is.finite(x)]
+  if(length(x) == 0) return(FALSE)
+
+  if(require_nonnegative && any(x < 0, na.rm = TRUE)) {
+    if(verbose) message("Auto-scale: negative values detected, use raw scale.")
+    return(FALSE)
+  }
+
+  if(length(unique(x)) <= 1 || stats::sd(x, na.rm = TRUE) == 0) {
+    if(verbose) message("Auto-scale: zero variance, use raw scale.")
+    return(FALSE)
+  }
+
+  x_pos <- x[x > 0]
+
+  if(length(x_pos) == 0) {
+    if(verbose) message("Auto-scale: all zeros, use raw scale.")
+    return(FALSE)
+  }
+
+  zero_fraction <- mean(x == 0, na.rm = TRUE)
+  max_median_ratio <- max(x, na.rm = TRUE) / max(stats::median(x, na.rm = TRUE), 1e-8)
+  q99_q50_ratio <- stats::quantile(x, 0.99, na.rm = TRUE) / max(stats::quantile(x, 0.50, na.rm = TRUE), 1e-8)
+
+  use_log <- (
+    zero_fraction >= zero_fraction_threshold ||
+      max_median_ratio >= ratio_threshold ||
+      q99_q50_ratio >= quantile_ratio_threshold
+  )
+
+  if(verbose) {
+    message(
+      "Auto-scale decision for vector: ",
+      "zero_fraction=", round(zero_fraction, 3),
+      "; max/median=", round(max_median_ratio, 3),
+      "; q99/q50=", round(q99_q50_ratio, 3),
+      "; use_log1p=", use_log
+    )
+  }
+
+  return(use_log)
+}
+
+smart_boxplot_with_stats <- function(df, value_col, group_col,
+                                     outfile = NULL,
+                                     title = NULL,
+                                     xlab = NULL,
+                                     ylab = NULL,
+                                     transform_mode = c("auto", "log1p", "raw"),
+                                     width = 5,
+                                     height = 4.5,
+                                     palette = NULL,
+                                     verbose = TRUE) {
+
+  transform_mode <- match.arg(transform_mode)
+
+  plot_df <- df[, c(value_col, group_col), drop = FALSE]
+  plot_df <- plot_df[complete.cases(plot_df), , drop = FALSE]
+
+  if(nrow(plot_df) == 0){
+    warning(paste0("No complete cases for plotting: ", value_col, " ~ ", group_col))
+    return(NULL)
+  }
+
+  plot_df[[group_col]] <- as.character(plot_df[[group_col]])
+  raw_y <- plot_df[[value_col]]
+
+  use_log1p <- FALSE
+  if(transform_mode == "log1p"){
+    use_log1p <- TRUE
+  } else if(transform_mode == "raw"){
+    use_log1p <- FALSE
+  } else if(transform_mode == "auto"){
+    use_log1p <- should_use_log1p(raw_y, verbose = verbose)
+  }
+
+  if(use_log1p){
+    plot_df$plot_value <- log1p(raw_y)
+    ylab_use <- ifelse(is.null(ylab), paste0("log1p(", value_col, ")"), ylab)
+    scale_note <- "log1p"
+  } else {
+    plot_df$plot_value <- raw_y
+    ylab_use <- ifelse(is.null(ylab), value_col, ylab)
+    scale_note <- "raw"
+  }
+
+  xlab_use <- ifelse(is.null(xlab), group_col, xlab)
+  title_use <- ifelse(is.null(title), value_col, title)
+
+  group_levels <- unique(plot_df[[group_col]])
+  plot_df[[group_col]] <- factor(plot_df[[group_col]], levels = group_levels)
+
+  if(is.null(palette)){
+    if(length(group_levels) == 2){
+      palette <- c("#E64B35", "#4DBBD5")
+      names(palette) <- group_levels
+    } else {
+      palette <- scales::hue_pal()(length(group_levels))
+      names(palette) <- group_levels
+    }
+  } else {
+    if(is.null(names(palette))){
+      if(length(palette) >= length(group_levels)){
+        names(palette) <- group_levels
+      }
+    }
+    palette <- palette[group_levels]
+  }
+
+  wt <- NULL
+  p_label <- "Wilcoxon p = NA"
+  if(length(unique(plot_df[[group_col]])) == 2 && stats::sd(raw_y, na.rm = TRUE) > 0){
+    wt <- tryCatch(
+      wilcox.test(raw_y ~ plot_df[[group_col]]),
+      error = function(e) NULL
+    )
+    if(!is.null(wt)){
+      p_label <- paste0("Wilcoxon p = ", signif(wt$p.value, 3))
+    }
+  }
+
+  y_max <- max(plot_df$plot_value, na.rm = TRUE)
+  y_min <- min(plot_df$plot_value, na.rm = TRUE)
+  y_span <- max(1e-8, y_max - y_min)
+  y_annot <- y_max + 0.08 * y_span
+
+  subtitle_use <- paste0("scale: ", scale_note)
+
+  p <- ggplot(plot_df, aes(x = .data[[group_col]], y = plot_value, fill = .data[[group_col]])) +
+    geom_boxplot(
+      width = 0.6,
+      outlier.shape = NA,
+      alpha = 0.85,
+      color = "black",
+      linewidth = 0.5
+    ) +
+    geom_jitter(
+      aes(color = .data[[group_col]]),
+      width = 0.15,
+      alpha = 0.75,
+      size = 2,
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = palette, drop = FALSE) +
+    scale_color_manual(values = palette, drop = FALSE) +
+    annotate("text", x = 1.5, y = y_annot, label = p_label, size = 4) +
+    theme_classic(base_size = 12) +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 15, hjust = 1, color = "black"),
+      axis.text.y = element_text(color = "black"),
+      axis.title = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 10, color = "grey30", hjust = 0.5)
+    ) +
+    labs(
+      x = xlab_use,
+      y = ylab_use,
+      title = title_use,
+      subtitle = subtitle_use
+    ) +
+    coord_cartesian(clip = "off")
+
+  if(!is.null(outfile)){
+    ggsave(outfile, p, width = width, height = height)
+  }
+
+  if(verbose){
+    message("Plot created: ", value_col, " ~ ", group_col, " [", scale_note, "]")
+  }
+
+  return(list(
+    plot = p,
+    wilcox = wt,
+    use_log1p = use_log1p,
+    scale_mode = scale_note
+  ))
+}
+
 run_rf_classifier <- function(feature_mat, meta, outcome = "host", prefix = "RF_model", ntree = 1000, seed = 123){
   set.seed(seed)
 
@@ -257,8 +444,6 @@ meta <- meta %>%
     sex = factor(sex),
     age = factor(age)
   )
-
-write.csv(meta, "R_out/tab/metadata_cleaned.csv", row.names = FALSE)
 
 ###############################
 ## 4. Read abundance tables
@@ -453,8 +638,6 @@ Heatmap(
   column_names_gp = grid::gpar(fontsize = 8)
 )
 dev.off()
-
-
 
 ###############################
 ## 11. Differential ARG (MaAsLin2)
@@ -674,6 +857,8 @@ write.csv(
   row.names = FALSE
 )
 
+plot_info_list <- list()
+
 for (cc in mge_test_cols) {
 
   out_file <- paste0("R_out/tab/wilcox_", cc, "_ARGhost_vs_nonARGhost.txt")
@@ -687,19 +872,44 @@ for (cc in mge_test_cols) {
   )
 
   if(!is.null(wt)){
-    p_tmp <- ggplot(mag_info2, aes(x = ARG_host_group, y = .data[[cc]], fill = ARG_host_group)) +
-      geom_boxplot(outlier.shape = NA) +
-      geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
-      theme_bw() +
-      labs(x = "ARG host group", y = cc)
 
-    ggsave(paste0("R_out/fig/", cc, "_ARGhost_compare.pdf"), p_tmp, width = 4, height = 4)
+    res_plot <- smart_boxplot_with_stats(
+      df = mag_info2,
+      value_col = cc,
+      group_col = "ARG_host_group",
+      outfile = paste0("R_out/fig/", cc, "_ARGhost_compare.pdf"),
+      title = paste0(cc, " comparison"),
+      xlab = "ARG host group",
+      ylab = NULL,
+      transform_mode = "auto",
+      width = 5,
+      height = 4.5,
+      palette = c(
+        "ARG_host_MAG" = "#E64B35",
+        "non_ARG_host_MAG" = "#4DBBD5"
+      ),
+      verbose = TRUE
+    )
 
     summary_tab <- safe_group_compare_table(mag_info2, cc, "ARG_host_group")
     write.csv(summary_tab,
               paste0("R_out/tab/", cc, "_ARGhost_compare_summary.csv"),
               row.names = FALSE)
+
+    plot_info_list[[cc]] <- data.frame(
+      feature = cc,
+      scale_mode = res_plot$scale_mode,
+      use_log1p = res_plot$use_log1p,
+      stringsAsFactors = FALSE
+    )
   }
+}
+
+if(length(plot_info_list) > 0){
+  plot_info_df <- do.call(rbind, plot_info_list)
+  write.csv(plot_info_df,
+            "R_out/tab/ARGhost_compare_plot_scale_modes.csv",
+            row.names = FALSE)
 }
 
 ###############################
@@ -744,14 +954,23 @@ if(length(cazy_total_cols) > 0){
       context = "ARG-host vs non-ARG-host CAZy comparison"
     )
 
-    p_cazy1 <- ggplot(cazy_compare1,
-                      aes(x = ARG_host_group, y = .data[[cazy_total_col]], fill = ARG_host_group)) +
-      geom_boxplot(outlier.shape = NA) +
-      geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
-      theme_bw() +
-      labs(x = NULL, y = cazy_total_col)
-
-    ggsave("R_out/fig/CAZy_ARGhost_vs_nonARGhost.pdf", p_cazy1, width = 5, height = 4)
+    p_cazy1 <- smart_boxplot_with_stats(
+      df = cazy_compare1,
+      value_col = cazy_total_col,
+      group_col = "ARG_host_group",
+      outfile = "R_out/fig/CAZy_ARGhost_vs_nonARGhost.pdf",
+      title = "CAZy comparison: ARG-host vs non-ARG-host",
+      xlab = "ARG host group",
+      ylab = NULL,
+      transform_mode = "auto",
+      width = 5,
+      height = 4.5,
+      palette = c(
+        "ARG_host_MAG" = "#E64B35",
+        "non_ARG_host_MAG" = "#4DBBD5"
+      ),
+      verbose = TRUE
+    )
 
     all_cazy_compare_cols1 <- c(cazy_family_cols, cazy_sub_cols, cazy_sub_family_cols)
 
@@ -836,14 +1055,23 @@ if(length(cazy_total_cols) > 0){
       context = "host-enriched ARG-host CAZy comparison"
     )
 
-    p_cazy2 <- ggplot(cazy_compare2,
-                      aes(x = host_enrichment, y = .data[[cazy_total_col]], fill = host_enrichment)) +
-      geom_boxplot(outlier.shape = NA) +
-      geom_jitter(width = 0.15, alpha = 0.6, size = 1.5) +
-      theme_bw() +
-      labs(x = NULL, y = cazy_total_col)
-
-    ggsave("R_out/fig/CAZy_host_enriched_ARGhost_compare.pdf", p_cazy2, width = 5, height = 4)
+    p_cazy2 <- smart_boxplot_with_stats(
+      df = cazy_compare2,
+      value_col = cazy_total_col,
+      group_col = "host_enrichment",
+      outfile = "R_out/fig/CAZy_host_enriched_ARGhost_compare.pdf",
+      title = "CAZy comparison in host-enriched ARG-host MAGs",
+      xlab = "Host enrichment",
+      ylab = NULL,
+      transform_mode = "auto",
+      width = 5,
+      height = 4.5,
+      palette = c(
+        "yak_enriched" = "#00A087",
+        "deer_enriched" = "#3C5488"
+      ),
+      verbose = TRUE
+    )
 
     all_cazy_compare_cols2 <- c(cazy_family_cols, cazy_sub_cols, cazy_sub_family_cols)
 
@@ -956,6 +1184,33 @@ if(length(vf_cols_main) > 0){
 
     vf_res1$q_value <- p.adjust(vf_res1$p_value, method = "BH")
     write.csv(vf_res1, "R_out/tab/VFDB_ARGhost_vs_nonARGhost.csv", row.names = FALSE)
+
+    # VFDB plots: ARG-host vs non-ARG-host
+    for(cc in vf_cols_main){
+      tmp_plot <- vf_compare1[, c(cc, "ARG_host_group"), drop = FALSE]
+      tmp_plot <- tmp_plot[complete.cases(tmp_plot), , drop = FALSE]
+
+      if(nrow(tmp_plot) > 0 && length(unique(tmp_plot$ARG_host_group)) == 2){
+        smart_boxplot_with_stats(
+          df = tmp_plot,
+          value_col = cc,
+          group_col = "ARG_host_group",
+          outfile = paste0("R_out/fig/", cc, "_VFDB_ARGhost_compare.pdf"),
+          title = paste0(cc, ": ARG-host vs non-ARG-host"),
+          xlab = "ARG host group",
+          ylab = NULL,
+          transform_mode = "auto",
+          width = 5,
+          height = 4.5,
+          palette = c(
+            "ARG_host_MAG" = "#E64B35",
+            "non_ARG_host_MAG" = "#4DBBD5"
+          ),
+          verbose = TRUE
+        )
+      }
+    }
+
   } else {
     writeLines("Skipping VFDB ARG-host vs non-ARG-host comparison: only one ARG_host_group present.",
                "R_out/tab/VFDB_ARGhost_vs_nonARGhost_skipped.txt")
@@ -1001,10 +1256,41 @@ if(length(vf_cols_main) > 0){
 
     vf_res2$q_value <- p.adjust(vf_res2$p_value, method = "BH")
     write.csv(vf_res2, "R_out/tab/VFDB_host_enriched_ARGhost.csv", row.names = FALSE)
+
+    # VFDB plots: yak-enriched vs deer-enriched ARG-host MAGs
+    for(cc in vf_cols_main){
+      tmp_plot <- vf_compare2[, c(cc, "host_enrichment"), drop = FALSE]
+      tmp_plot <- tmp_plot[complete.cases(tmp_plot), , drop = FALSE]
+
+      if(nrow(tmp_plot) > 0 && length(unique(tmp_plot$host_enrichment)) == 2){
+        smart_boxplot_with_stats(
+          df = tmp_plot,
+          value_col = cc,
+          group_col = "host_enrichment",
+          outfile = paste0("R_out/fig/", cc, "_VFDB_host_enriched_ARGhost_compare.pdf"),
+          title = paste0(cc, ": yak-enriched vs deer-enriched ARG-host MAGs"),
+          xlab = "Host enrichment",
+          ylab = NULL,
+          transform_mode = "auto",
+          width = 5,
+          height = 4.5,
+          palette = c(
+            "yak_enriched" = "#00A087",
+            "deer_enriched" = "#3C5488"
+          ),
+          verbose = TRUE
+        )
+      }
+    }
+
   } else {
     writeLines("Skipping VFDB host-enriched ARG-host comparison: not enough yak/deer enriched ARG-host MAGs.",
                "R_out/tab/VFDB_host_enriched_ARGhost_skipped.txt")
   }
+
+} else {
+  writeLines("Skipping VFDB analysis: no VFDB columns found in mag_info2.",
+             "R_out/tab/VFDB_analysis_skipped.txt")
 }
 
 ###############################
@@ -1121,7 +1407,7 @@ if (nrow(net_edges) > 0) {
     scale_color_manual(values = c("MAG" = "#1f78b4", "ARG" = "#e31a1c")) +
     theme_void()
 
-    ggsave("R_out/fig/network_ARG_MAG_bipartite.pdf", p_net, width = 10, height = 8)
+  ggsave("R_out/fig/network_ARG_MAG_bipartite.pdf", p_net, width = 10, height = 8)
 }
 
 ###############################
@@ -1129,38 +1415,311 @@ if (nrow(net_edges) > 0) {
 ###############################
 
 if (file.exists("13_tables/arg_mge_mag_edges.tsv")) {
+
   arg_mge_mag <- fread("13_tables/arg_mge_mag_edges.tsv") %>% as.data.frame()
 
+  # 若没有 MGE_type，则从现有MGE证据列自动构建
   if (all(c("MAG", "ARG", "MGE_type") %in% colnames(arg_mge_mag))) {
-    mag_nodes3 <- data.frame(name = unique(arg_mge_mag$MAG), node_type = "MAG") %>%
-      left_join(mag_info2 %>% select(MAG, host_enrichment, risk_score), by = c("name" = "MAG"))
 
-    arg_nodes3 <- data.frame(name = unique(arg_mge_mag$ARG), node_type = "ARG")
-    mge_nodes3 <- data.frame(name = unique(arg_mge_mag$MGE_type), node_type = "MGE")
+    edge_long <- arg_mge_mag %>%
+      dplyr::select(MAG, ARG, MGE_type) %>%
+      dplyr::filter(!is.na(MAG), !is.na(ARG), !is.na(MGE_type), MGE_type != "")
+
+  } else if (all(c("MAG", "ARG") %in% colnames(arg_mge_mag))) {
+
+    edge_list <- list()
+
+    if ("plasmid_like" %in% colnames(arg_mge_mag)) {
+      edge_list[["plasmid"]] <- arg_mge_mag %>%
+        dplyr::filter(plasmid_like == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "Plasmid")
+    }
+
+    if ("virus_like" %in% colnames(arg_mge_mag)) {
+      edge_list[["virus"]] <- arg_mge_mag %>%
+        dplyr::filter(virus_like == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "Virus")
+    }
+
+    if ("integron_present" %in% colnames(arg_mge_mag)) {
+      edge_list[["integron"]] <- arg_mge_mag %>%
+        dplyr::filter(integron_present == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "Integron")
+    }
+
+    if ("integrase_present" %in% colnames(arg_mge_mag)) {
+      edge_list[["integrase"]] <- arg_mge_mag %>%
+        dplyr::filter(integrase_present == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "Integrase")
+    }
+
+    if ("IS_present" %in% colnames(arg_mge_mag)) {
+      edge_list[["IS"]] <- arg_mge_mag %>%
+        dplyr::filter(IS_present == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "IS element")
+    }
+
+    if ("transposase_count" %in% colnames(arg_mge_mag)) {
+      edge_list[["transposase"]] <- arg_mge_mag %>%
+        dplyr::filter(transposase_count > 0) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "Transposase")
+    }
+
+    if ("TIR_present" %in% colnames(arg_mge_mag)) {
+      edge_list[["TIR"]] <- arg_mge_mag %>%
+        dplyr::filter(TIR_present == 1) %>%
+        dplyr::transmute(MAG, ARG, MGE_type = "TIR")
+    }
+
+    edge_long <- dplyr::bind_rows(edge_list) %>%
+      dplyr::distinct()
+
+  } else {
+    edge_long <- NULL
+  }
+
+  if (!is.null(edge_long) && nrow(edge_long) > 0) {
+
+    # 若有 ARG_std，优先用简化名称
+    if ("ARG_std" %in% colnames(arg_mge_mag)) {
+      arg_label_map <- arg_mge_mag %>%
+        dplyr::select(ARG, ARG_std) %>%
+        dplyr::filter(!is.na(ARG), !is.na(ARG_std), ARG_std != "") %>%
+        dplyr::distinct()
+
+      edge_long <- edge_long %>%
+        left_join(arg_label_map, by = "ARG") %>%
+        dplyr::mutate(ARG_label = ifelse(!is.na(ARG_std) & ARG_std != "", ARG_std, ARG))
+    } else {
+      edge_long$ARG_label <- edge_long$ARG
+    }
+
+    # 节点表
+    mag_nodes3 <- data.frame(name = unique(edge_long$MAG), node_type = "MAG") %>%
+      left_join(
+        mag_info2 %>% dplyr::select(MAG, host_enrichment, risk_score),
+        by = c("name" = "MAG")
+      )
+
+    arg_nodes3 <- data.frame(
+      name = unique(edge_long$ARG_label),
+      node_type = "ARG"
+    )
+
+    mge_nodes3 <- data.frame(
+      name = unique(edge_long$MGE_type),
+      node_type = "MGE"
+    )
 
     nodes3 <- bind_rows(mag_nodes3, arg_nodes3, mge_nodes3)
 
-    edges_mag_arg <- arg_mge_mag %>% select(from = MAG, to = ARG) %>% distinct()
-    edges_arg_mge <- arg_mge_mag %>% select(from = ARG, to = MGE_type) %>% distinct()
-    edges3 <- bind_rows(edges_mag_arg, edges_arg_mge)
+    # 边表
+    edges_mag_arg <- edge_long %>%
+      dplyr::select(from = MAG, to = ARG_label) %>%
+      dplyr::distinct()
 
-    g_tri <- graph_from_data_frame(edges3, vertices = nodes3, directed = FALSE)
+    edges_arg_mge <- edge_long %>%
+      dplyr::select(from = ARG_label, to = MGE_type) %>%
+      dplyr::distinct()
 
-    p_tri <- ggraph(g_tri, layout = "fr") +
-      geom_edge_link(alpha = 0.25, colour = "grey60") +
-      geom_node_point(aes(color = node_type,
-                          size = case_when(
-                            node_type == "MAG" ~ risk_score + 1,
-                            node_type == "ARG" ~ 3,
-                            TRUE ~ 4
-                          ))) +
-      geom_node_text(aes(label = ifelse(node_type != "MAG", name, "")),
-                     repel = TRUE, size = 3) +
-      scale_color_manual(values = c("MAG" = "#1f78b4", "ARG" = "#e31a1c", "MGE" = "#33a02c")) +
-      theme_void()
+    edges3 <- bind_rows(edges_mag_arg, edges_arg_mge) %>%
+      dplyr::distinct()
 
-    ggsave("R_out/fig/network_ARG_MGE_MAG_tripartite.pdf", p_tri, width = 11, height = 9)
+    if (nrow(edges3) > 0) {
+
+      g_tri <- graph_from_data_frame(edges3, vertices = nodes3, directed = FALSE)
+
+      V(g_tri)$degree <- igraph::degree(g_tri)
+
+      node_df <- igraph::as_data_frame(g_tri, what = "vertices") %>%
+        dplyr::mutate(
+          risk_score = ifelse(is.na(risk_score), 0, risk_score)
+        )
+
+      # 将 MAG 风险值分级，用于 size 图例
+      mag_risk_vals <- node_df$risk_score[node_df$node_type == "MAG"]
+
+      if (length(mag_risk_vals[is.finite(mag_risk_vals)]) >= 3 &&
+          length(unique(mag_risk_vals[is.finite(mag_risk_vals)])) >= 3) {
+
+        qs <- quantile(mag_risk_vals, probs = c(0.33, 0.67), na.rm = TRUE)
+
+        node_df <- node_df %>%
+          dplyr::mutate(
+            size_group = dplyr::case_when(
+              node_type == "MAG" & risk_score <= qs[1] ~ "MAG: low risk",
+              node_type == "MAG" & risk_score > qs[1] & risk_score <= qs[2] ~ "MAG: medium risk",
+              node_type == "MAG" & risk_score > qs[2] ~ "MAG: high risk",
+              node_type == "ARG" ~ "ARG",
+              node_type == "MGE" ~ "MGE",
+              TRUE ~ "Other"
+            )
+          )
+      } else {
+        node_df <- node_df %>%
+          dplyr::mutate(
+            size_group = dplyr::case_when(
+              node_type == "MAG" ~ "MAG",
+              node_type == "ARG" ~ "ARG",
+              node_type == "MGE" ~ "MGE",
+              TRUE ~ "Other"
+            )
+          )
+      }
+
+      # 标签策略：MGE全部标；ARG只标高连接度；MAG不标
+      arg_deg <- node_df$degree[node_df$node_type == "ARG"]
+      arg_degree_cutoff <- if (length(arg_deg) > 0) quantile(arg_deg, 0.75, na.rm = TRUE) else Inf
+      if (!is.finite(arg_degree_cutoff)) arg_degree_cutoff <- 2
+
+      node_df <- node_df %>%
+        dplyr::mutate(
+          label = dplyr::case_when(
+            node_type == "MGE" ~ name,
+            node_type == "ARG" & degree >= arg_degree_cutoff ~ name,
+            TRUE ~ NA_character_
+          )
+        )
+
+      g_tri2 <- graph_from_data_frame(edges3, vertices = node_df, directed = FALSE)
+
+      # size 图例定义
+      if (any(grepl("^MAG: ", node_df$size_group))) {
+        size_values <- c(
+          "MAG: low risk" = 4,
+          "MAG: medium risk" = 6,
+          "MAG: high risk" = 8,
+          "ARG" = 4.3,
+          "MGE" = 5.3
+        )
+        size_breaks <- c("MAG: low risk", "MAG: medium risk", "MAG: high risk", "ARG", "MGE")
+      } else {
+        size_values <- c(
+          "MAG" = 6,
+          "ARG" = 4.3,
+          "MGE" = 5.3
+        )
+        size_breaks <- c("MAG", "ARG", "MGE")
+      }
+
+      p_tri <- ggraph(g_tri2, layout = "stress") +
+        geom_edge_link(
+          colour = "grey75",
+          alpha = 0.35,
+          linewidth = 0.45
+        ) +
+        geom_node_point(
+          aes(fill = node_type, shape = node_type, size = size_group),
+          color = "black",
+          alpha = 0.95,
+          stroke = 0.45
+        ) +
+        geom_node_text(
+          aes(label = label),
+          repel = TRUE,
+          size = 3.2,
+          color = "black",
+          max.overlaps = Inf
+        ) +
+        scale_fill_manual(
+          name = "Node type",
+          values = c(
+            "MAG" = "#4C78A8",
+            "ARG" = "#E45756",
+            "MGE" = "#54A24B"
+          )
+        ) +
+        scale_shape_manual(
+          name = "Node type",
+          values = c(
+            "MAG" = 21,
+            "ARG" = 22,
+            "MGE" = 24
+          )
+        ) +
+        scale_size_manual(
+          name = "Node importance",
+          values = size_values,
+          breaks = size_breaks
+        ) +
+        guides(
+          fill = guide_legend(
+            order = 1,
+            override.aes = list(
+              shape = 21,
+              size = 5,
+              color = "black",
+              alpha = 1
+            )
+          ),
+          shape = guide_legend(
+            order = 2,
+            override.aes = list(
+              fill = "grey70",
+              size = 5,
+              color = "black",
+              alpha = 1
+            )
+          ),
+          size = guide_legend(
+            order = 3,
+            override.aes = list(
+              shape = 21,
+              fill = "grey70",
+              color = "black",
+              alpha = 1
+            )
+          )
+        ) +
+        labs(
+          title = "ARG–MGE–MAG tripartite network",
+          subtitle = "Node fill and shape indicate category; MAG node size reflects risk level",
+          caption = "ARG labels are simplified using ARG_std when available. Only high-degree ARGs are labeled."
+        ) +
+        theme_void(base_size = 12) +
+        theme(
+          plot.title = element_text(face = "bold", size = 15, hjust = 0.5),
+          plot.subtitle = element_text(size = 11, hjust = 0.5, color = "grey30"),
+          plot.caption = element_text(size = 9, color = "grey40"),
+          legend.position = "right",
+          legend.box = "vertical",
+          legend.title = element_text(face = "bold", size = 11),
+          legend.text = element_text(size = 10),
+          legend.spacing.y = unit(0.2, "cm")
+        )
+
+      ggsave(
+        "R_out/fig/network_ARG_MGE_MAG_tripartite.pdf",
+        p_tri,
+        width = 12,
+        height = 9
+      )
+
+      write.table(
+        edge_long,
+        "R_out/tab/ARG_MGE_MAG_tripartite_edges_used.tsv",
+        sep = "\t", quote = FALSE, row.names = FALSE
+      )
+
+    } else {
+      writeLines(
+        "Tripartite network skipped: no valid edges after processing.",
+        "R_out/tab/ARG_MGE_MAG_tripartite_skipped.txt"
+      )
+    }
+
+  } else {
+    writeLines(
+      "Tripartite network skipped: no MGE_type column and no positive MGE evidence columns found.",
+      "R_out/tab/ARG_MGE_MAG_tripartite_skipped.txt"
+    )
   }
+
+} else {
+  writeLines(
+    "Tripartite network skipped: file 13_tables/arg_mge_mag_edges.tsv not found.",
+    "R_out/tab/ARG_MGE_MAG_tripartite_skipped.txt"
+  )
 }
 
 ###############################
