@@ -1,0 +1,69 @@
+#3. MAG 丰度矩阵：reads 回贴到 non-redundant MAG catalog
+#3.1 合并 catalog
+cat 07_drep/out/dereplicated_genomes/*.fa > 07_drep/mag_catalog.fa
+bowtie2-build 07_drep/mag_catalog.fa 07_drep/mag_catalog
+
+#3.2 用 CoverM 计算每个样本对每个 MAG 的覆盖/相对丰度
+conda activate coverm
+mkdir -p 09_mapping/coverm
+
+while IFS=$'\t' read -r sample host site season sex age r1 r2; do
+  coverm genome \
+    --coupled "03_host_removed/${sample}_R1.fq.gz" "03_host_removed/${sample}_R2.fq.gz" \
+    --genome-fasta-directory 07_drep/out/dereplicated_genomes \
+    --methods relative_abundance trimmed_mean covered_fraction mean \
+    --min-read-aligned-percent 75 \
+    --min-read-percent-identity 95 \
+    --threads 24 \
+    > "09_mapping/coverm/${sample}.tsv"
+done < <(tail -n +2 00_meta/samples.tsv)
+
+conda deactivate
+
+#3.3 用 salmon 计算每个样本对每个 ARG 的覆盖/相对丰度
+conda activate salmon
+
+python build_arg_reference_from_ffn.py \
+  --arg_table 13_tables/contig_arg_mge.tsv \
+  --ffn_dir 12_contig_level/prodigal \
+  --out_fasta 10_annotation/arg/all_ARG_candidates.fa \
+  --out_map 10_annotation/arg/all_ARG_candidates.map.tsv
+
+cd-hit-est -i 10_annotation/arg/all_ARG_candidates.fa -o 10_annotation/arg/all_ARG_candidates.nr.fa -c 0.95 -n 10  -T 64 -M 0
+conda deactivate
+
+conda activate salmon
+salmon index -t 10_annotation/arg/all_ARG_candidates.nr.fa -i 10_annotation/arg/salmon_index  -k 31
+
+set -euo pipefail
+
+SAMPLE_TSV="00_meta/samples.tsv"
+INDEX="10_annotation/arg/salmon_index"
+OUTDIR="13_tables/salmon_arg"
+THREADS=64
+
+mkdir -p "${OUTDIR}"
+
+tail -n +2 "${SAMPLE_TSV}" | while IFS=$'\t' read -r sample host site season sex age r1 r2
+do
+    echo "[INFO] Quantifying ARGs for ${sample}"
+
+    R1="/data/xb/metagenome/03.hostFreeData/${sample}.hostFree.R1.fq.gz"
+    R2="/data/xb/metagenome/03.hostFreeData/${sample}.hostFree.R2.fq.gz"
+
+    salmon quant \
+        -i "${INDEX}" \
+        -l A \
+        -1 "${R1}" \
+        -2 "${R2}" \
+        -p "${THREADS}" \
+        --validateMappings \
+        -o "${OUTDIR}/${sample}"
+done
+conda deactivate
+python merge_salmon_arg_to_matrix.py \
+  --salmon_dir 13_tables/salmon_arg \
+  --arg_map 10_annotation/arg/all_ARG_candidates.map.tsv \
+  --output /13_tables/sample_arg_abundance.tsv
+
+
