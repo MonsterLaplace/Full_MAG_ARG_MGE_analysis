@@ -769,6 +769,10 @@ mag_shared <- data.frame(
 mag_info2 <- mag_info %>%
   left_join(mag_shared, by = "MAG")
 
+## 输出结果：保存文件
+write.csv(mag_shared, "R_out/tab/mag_shared_host_specific.csv", row.names = FALSE)
+write.csv(mag_info2, "R_out/tab/mag_info2_with_occurrence.csv", row.names = FALSE)
+
 ###############################
 ## 16. Add host enrichment labels
 ###############################
@@ -790,6 +794,9 @@ if (!is.null(maas_mag_host) && nrow(maas_mag_host) > 0) {
 } else {
   mag_info2 <- mag_info2 %>% mutate(host_enrichment = "non_sig")
 }
+
+## 输出结果：保存最终结果
+write.csv(mag_info2, "R_out/tab/mag_info2_with_host_enrichment.csv", row.names = FALSE)
 
 ###############################
 ## 17. Risk score
