@@ -1,5 +1,5 @@
 ###############################
-## Full customized R workflow v4.3
+## Full customized R workflow v4
 ## For representative MAG + ARG + MGE analysis
 ## Dataset: Yak vs White-lipped deer
 ## Beautified/updated version with smart boxplots
@@ -36,6 +36,7 @@ library(pROC)
 library(igraph)
 library(ggraph)
 library(ape)
+library(broom)
 
 if (requireNamespace("Maaslin2", quietly = TRUE)) library(Maaslin2)
 if (requireNamespace("ggtree", quietly = TRUE)) library(ggtree)
@@ -468,8 +469,8 @@ mag_mat <- mag_mat[meta$sample, , drop = FALSE]
 ## 5. Read annotation tables
 ###############################
 
-mag_arg <- fread("13_tables/mag_arg_catalog.tsv") %>% as.data.frame()
-check_required_cols(mag_arg, c("MAG", "ARG", "Class"), "mag_arg_catalog.tsv")
+mag_arg <- fread("13_tables/mag_arg_highconf_std.tsv") %>% as.data.frame()
+check_required_cols(mag_arg, c("MAG", "ARG_std", "Class"), "mag_arg_highconf_std.tsv")
 
 gtdb <- fread("08_gtdbtk/classification_pplacer.tsv") %>% as.data.frame()
 check_required_cols(gtdb, c("user_genome", "classification"), "classification_pplacer.tsv")
@@ -551,57 +552,410 @@ mag_clr <- clr_transform(mag_mat)
 ## 8. Resistome alpha diversity
 ###############################
 
+# create output directories
+dir.create("R_out/tab", recursive = TRUE, showWarnings = FALSE)
+dir.create("R_out/fig", recursive = TRUE, showWarnings = FALSE)
+dir.create("R_out/tab/alpha_stats", recursive = TRUE, showWarnings = FALSE)
+dir.create("R_out/tab/beta_stats", recursive = TRUE, showWarnings = FALSE)
+
+# make sure metadata order matches matrices
+meta <- meta[match(rownames(arg_rel), meta$sample), , drop = FALSE]
+meta$host <- as.factor(meta$host)
+meta$season <- as.factor(meta$season)
+
+# alpha diversity table
 resistome_alpha <- data.frame(
   sample = rownames(arg_mat),
-  ARG_burden = rowSums(arg_mat),
-  ARG_richness = rowSums(arg_mat > 0),
-  ARG_shannon =vegan::diversity(arg_mat, index = "shannon")
+  ARG_burden = rowSums(arg_mat, na.rm = TRUE),
+  ARG_richness = rowSums(arg_mat > 0, na.rm = TRUE),
+  ARG_shannon = vegan::diversity(arg_mat, index = "shannon")
 ) %>%
-  left_join(meta, by = "sample")
+  dplyr::left_join(meta, by = "sample")
 
 write.csv(resistome_alpha, "R_out/tab/resistome_alpha.csv", row.names = FALSE)
 
-plot_box_jitter(resistome_alpha, "host", "ARG_burden", "host", "R_out/fig/resistome_ARG_burden_by_host.pdf")
-plot_box_jitter(resistome_alpha, "host", "ARG_richness", "host", "R_out/fig/resistome_ARG_richness_by_host.pdf")
-plot_box_jitter(resistome_alpha, "host", "ARG_shannon", "host", "R_out/fig/resistome_ARG_shannon_by_host.pdf")
-plot_box_jitter(resistome_alpha, "season", "ARG_burden", "season", "R_out/fig/resistome_ARG_burden_by_season.pdf")
+# alpha diversity plots
+plot_box_jitter(
+  resistome_alpha,
+  "host",
+  "ARG_burden",
+  "host",
+  "R_out/fig/resistome_ARG_burden_by_host.pdf"
+)
+
+plot_box_jitter(
+  resistome_alpha,
+  "host",
+  "ARG_richness",
+  "host",
+  "R_out/fig/resistome_ARG_richness_by_host.pdf"
+)
+
+plot_box_jitter(
+  resistome_alpha,
+  "host",
+  "ARG_shannon",
+  "host",
+  "R_out/fig/resistome_ARG_shannon_by_host.pdf"
+)
+
+plot_box_jitter(
+  resistome_alpha,
+  "season",
+  "ARG_burden",
+  "season",
+  "R_out/fig/resistome_ARG_burden_by_season.pdf"
+)
+
+plot_box_jitter(
+  resistome_alpha,
+  "season",
+  "ARG_richness",
+  "season",
+  "R_out/fig/resistome_ARG_richness_by_season.pdf"
+)
+
+plot_box_jitter(
+  resistome_alpha,
+  "season",
+  "ARG_shannon",
+  "season",
+  "R_out/fig/resistome_ARG_shannon_by_season.pdf"
+)
+
+###############################
+## 8A. Alpha diversity statistics
+###############################
+
+alpha_vars <- c("ARG_burden", "ARG_richness", "ARG_shannon")
+
+run_alpha_stats <- function(df, response, group_var, out_prefix) {
+  subdf <- df %>%
+    dplyr::select(all_of(c(response, group_var))) %>%
+    dplyr::filter(!is.na(.data[[response]]), !is.na(.data[[group_var]]))
+  
+  colnames(subdf) <- c("y", "group")
+  subdf$group <- as.factor(subdf$group)
+  
+  # overall Kruskal-Wallis test
+  kw <- kruskal.test(y ~ group, data = subdf)
+  kw_df <- data.frame(
+    variable = response,
+    grouping = group_var,
+    method = "Kruskal-Wallis",
+    statistic = unname(kw$statistic),
+    df = unname(kw$parameter),
+    p.value = kw$p.value
+  )
+  write.csv(kw_df, paste0(out_prefix, "_overall.csv"), row.names = FALSE)
+  
+  # pairwise / 2-group Wilcoxon with exact = FALSE to avoid tie warnings
+  if (nlevels(subdf$group) > 2) {
+    pw <- pairwise.wilcox.test(
+      x = subdf$y,
+      g = subdf$group,
+      p.adjust.method = "BH",
+      exact = FALSE
+    )
+    
+    pw_df <- as.data.frame(as.table(pw$p.value))
+    colnames(pw_df) <- c("group1", "group2", "p.adj")
+    pw_df <- pw_df %>%
+      dplyr::filter(!is.na(p.adj)) %>%
+      dplyr::mutate(
+        variable = response,
+        grouping = group_var,
+        method = "Pairwise Wilcoxon"
+      ) %>%
+      dplyr::select(variable, grouping, method, group1, group2, p.adj)
+    
+    write.csv(pw_df, paste0(out_prefix, "_pairwise.csv"), row.names = FALSE)
+  } else if (nlevels(subdf$group) == 2) {
+    levs <- levels(subdf$group)
+    wt <- wilcox.test(y ~ group, data = subdf, exact = FALSE)
+    pw_df <- data.frame(
+      variable = response,
+      grouping = group_var,
+      method = "Wilcoxon rank-sum",
+      group1 = levs[1],
+      group2 = levs[2],
+      p.value = wt$p.value
+    )
+    write.csv(pw_df, paste0(out_prefix, "_pairwise.csv"), row.names = FALSE)
+  }
+  
+  return(kw_df)
+}
+
+alpha_kw_results <- dplyr::bind_rows(
+  lapply(alpha_vars, function(v) {
+    run_alpha_stats(
+      resistome_alpha,
+      response = v,
+      group_var = "host",
+      out_prefix = paste0("R_out/tab/alpha_stats/", v, "_by_host")
+    )
+  }),
+  lapply(alpha_vars, function(v) {
+    run_alpha_stats(
+      resistome_alpha,
+      response = v,
+      group_var = "season",
+      out_prefix = paste0("R_out/tab/alpha_stats/", v, "_by_season")
+    )
+  })
+)
+
+write.csv(
+  alpha_kw_results,
+  "R_out/tab/alpha_stats/resistome_alpha_kw_summary.csv",
+  row.names = FALSE
+)
+
+###############################
+## 8B. Two-factor models for alpha diversity
+###############################
+
+run_alpha_lm <- function(df, response) {
+  subdf <- df %>%
+    dplyr::select(all_of(c(response, "host", "season"))) %>%
+    dplyr::filter(
+      !is.na(.data[[response]]),
+      !is.na(host),
+      !is.na(season)
+    )
+  
+  form <- stats::as.formula(paste(response, "~ host * season"))
+  fit <- stats::lm(form, data = subdf)
+  anova_res <- stats::anova(fit)
+  
+  anova_df <- data.frame(
+    variable = response,
+    term = rownames(anova_res),
+    Df = anova_res$Df,
+    SumSq = anova_res$`Sum Sq`,
+    MeanSq = anova_res$`Mean Sq`,
+    Fvalue = anova_res$`F value`,
+    p.value = anova_res$`Pr(>F)`,
+    row.names = NULL
+  )
+  
+  write.csv(
+    anova_df,
+    paste0("R_out/tab/alpha_stats/", response, "_lm_host_season.csv"),
+    row.names = FALSE
+  )
+  
+  return(anova_df)
+}
+
+alpha_lm_results <- dplyr::bind_rows(
+  lapply(alpha_vars, function(v) run_alpha_lm(resistome_alpha, v))
+)
+
+write.csv(
+  alpha_lm_results,
+  "R_out/tab/alpha_stats/resistome_alpha_lm_summary.csv",
+  row.names = FALSE
+)
 
 ###############################
 ## 9. Resistome beta diversity
 ###############################
 
+# make sure matrices follow the same sample order
+arg_rel <- arg_rel[meta$sample, , drop = FALSE]
+arg_clr <- arg_clr[meta$sample, , drop = FALSE]
+
+# Bray-Curtis on relative abundance
 arg_bray <- vegan::vegdist(arg_rel, method = "bray")
+
+# Aitchison distance on CLR-transformed matrix
+arg_euc <- dist(arg_clr)
+
+# PCoA for Bray-Curtis
 arg_pcoa <- ape::pcoa(arg_bray)
+
 arg_pcoa_df <- data.frame(
   sample = rownames(arg_rel),
-  PC1 = arg_pcoa$vectors[,1],
-  PC2 = arg_pcoa$vectors[,2]
-) %>% 
-  left_join(meta, by = "sample")
+  PC1 = arg_pcoa$vectors[, 1],
+  PC2 = arg_pcoa$vectors[, 2]
+) %>%
+  dplyr::left_join(meta, by = "sample")
+
 pc1_exp <- round(arg_pcoa$values$Relative_eig[1] * 100, 2)
 pc2_exp <- round(arg_pcoa$values$Relative_eig[2] * 100, 2)
-p_arg_pcoa <- ggplot(arg_pcoa_df, aes(PC1, PC2, color = host, shape = season)) +
+
+###############################
+## 9A. PERMANOVA
+###############################
+
+perm_arg_bray <- vegan::adonis2(arg_bray ~ host * season, data = meta, permutations = 999)
+perm_arg_euc  <- vegan::adonis2(arg_euc  ~ host * season, data = meta, permutations = 999)
+
+capture.output(perm_arg_bray, file = "R_out/tab/beta_stats/resistome_PERMANOVA_bray.txt")
+capture.output(perm_arg_euc,  file = "R_out/tab/beta_stats/resistome_PERMANOVA_aitchison.txt")
+
+perm_to_df <- function(adonis_obj, method_name) {
+  tab <- as.data.frame(adonis_obj)
+  tab$term <- rownames(tab)
+  rownames(tab) <- NULL
+  tab$distance <- method_name
+  tab %>%
+    dplyr::select(distance, term, dplyr::everything())
+}
+
+perm_arg_bray_df <- perm_to_df(perm_arg_bray, "Bray-Curtis")
+perm_arg_euc_df  <- perm_to_df(perm_arg_euc, "Aitchison")
+
+write.csv(
+  perm_arg_bray_df,
+  "R_out/tab/beta_stats/resistome_PERMANOVA_bray.csv",
+  row.names = FALSE
+)
+write.csv(
+  perm_arg_euc_df,
+  "R_out/tab/beta_stats/resistome_PERMANOVA_aitchison.csv",
+  row.names = FALSE
+)
+
+perm_summary <- dplyr::bind_rows(perm_arg_bray_df, perm_arg_euc_df)
+write.csv(
+  perm_summary,
+  "R_out/tab/beta_stats/resistome_PERMANOVA_summary.csv",
+  row.names = FALSE
+)
+
+get_adonis_term <- function(adonis_df, term_name) {
+  sub <- adonis_df[adonis_df$term == term_name, , drop = FALSE]
+  if (nrow(sub) == 0) {
+    return(list(R2 = NA, p = NA))
+  }
+  list(
+    R2 = round(sub$R2[1], 3),
+    p = signif(sub$`Pr(>F)`[1], 3)
+  )
+}
+
+host_res   <- get_adonis_term(perm_arg_bray_df, "host")
+season_res <- get_adonis_term(perm_arg_bray_df, "season")
+inter_res  <- get_adonis_term(perm_arg_bray_df, "host:season")
+
+###############################
+## 9B. PCoA plot
+###############################
+
+p_arg_pcoa <- ggplot(arg_pcoa_df, aes(x = PC1, y = PC2, color = host, shape = season)) +
   geom_point(size = 3, alpha = 0.9) +
   stat_ellipse(
     data = arg_pcoa_df,
-    aes(PC1, PC2, color = host, group = host),
+    mapping = aes(x = PC1, y = PC2, color = host, group = host),
     inherit.aes = FALSE,
-    level = 0.95
+    level = 0.95,
+    linewidth = 0.8,
+    show.legend = FALSE
   ) +
   labs(
     x = paste0("PCoA1 (", pc1_exp, "%)"),
     y = paste0("PCoA2 (", pc2_exp, "%)")
   ) +
+  annotate(
+    "text",
+    x = Inf, y = Inf,
+    hjust = 1.05, vjust = 1.5,
+    size = 3.5,
+    label = paste0(
+      "PERMANOVA (Bray)\n",
+      "host: R2=", host_res$R2, ", p=", host_res$p, "\n",
+      "season: R2=", season_res$R2, ", p=", season_res$p, "\n",
+      "host×season: R2=", inter_res$R2, ", p=", inter_res$p
+    )
+  ) +
   theme_bw()
 
-ggsave("R_out/fig/resistome_PCoA_bray.pdf", p_arg_pcoa, width = 6, height = 5)
+ggsave("R_out/fig/resistome_PCoA_bray.pdf", p_arg_pcoa, width = 6.5, height = 5.5)
 
-arg_euc <- dist(arg_clr)
-perm_arg_bray <- vegan::adonis2(arg_bray ~ host * season, data = meta, permutations = 999)
-perm_arg_euc  <- vegan::adonis2(arg_euc ~ host * season, data = meta, permutations = 999)
+###############################
+## 9C. Beta dispersion statistics
+###############################
 
-capture.output(perm_arg_bray, file = "R_out/tab/resistome_PERMANOVA_bray.txt")
-capture.output(perm_arg_euc, file = "R_out/tab/resistome_PERMANOVA_aitchison.txt")
+run_betadisper_stats <- function(dist_obj, group_vec, group_name, distance_name, out_prefix) {
+  group_vec <- as.factor(group_vec)
+  keep <- !is.na(group_vec)
+  
+  dist_mat <- as.matrix(dist_obj)
+  dist_mat <- dist_mat[keep, keep, drop = FALSE]
+  dist_sub <- as.dist(dist_mat)
+  group_sub <- droplevels(group_vec[keep])
+  
+  bd <- vegan::betadisper(dist_sub, group_sub)
+  bd_anova <- anova(bd)
+  bd_perm <- permutest(bd, permutations = 999)
+  
+  capture.output(bd_anova, file = paste0(out_prefix, "_anova.txt"))
+  capture.output(bd_perm, file = paste0(out_prefix, "_permutest.txt"))
+  
+  anova_df <- data.frame(
+    distance = distance_name,
+    grouping = group_name,
+    method = "betadisper_anova",
+    Df = bd_anova$Df[1],
+    SumSq = bd_anova$`Sum Sq`[1],
+    MeanSq = bd_anova$`Mean Sq`[1],
+    Fvalue = bd_anova$`F value`[1],
+    p.value = bd_anova$`Pr(>F)`[1]
+  )
+  
+  perm_df <- data.frame(
+    distance = distance_name,
+    grouping = group_name,
+    method = "betadisper_permutest",
+    Fvalue = bd_perm$tab[1, "F"],
+    p.value = bd_perm$tab[1, "Pr(>F)"]
+  )
+  
+  write.csv(anova_df, paste0(out_prefix, "_anova.csv"), row.names = FALSE)
+  write.csv(perm_df, paste0(out_prefix, "_permutest.csv"), row.names = FALSE)
+  
+  dplyr::bind_rows(anova_df, perm_df)
+}
+
+betadisper_results <- dplyr::bind_rows(
+  run_betadisper_stats(
+    dist_obj = arg_bray,
+    group_vec = meta$host,
+    group_name = "host",
+    distance_name = "Bray-Curtis",
+    out_prefix = "R_out/tab/beta_stats/resistome_betadisper_host_bray"
+  ),
+  run_betadisper_stats(
+    dist_obj = arg_bray,
+    group_vec = meta$season,
+    group_name = "season",
+    distance_name = "Bray-Curtis",
+    out_prefix = "R_out/tab/beta_stats/resistome_betadisper_season_bray"
+  ),
+  run_betadisper_stats(
+    dist_obj = arg_euc,
+    group_vec = meta$host,
+    group_name = "host",
+    distance_name = "Aitchison",
+    out_prefix = "R_out/tab/beta_stats/resistome_betadisper_host_aitchison"
+  ),
+  run_betadisper_stats(
+    dist_obj = arg_euc,
+    group_vec = meta$season,
+    group_name = "season",
+    distance_name = "Aitchison",
+    out_prefix = "R_out/tab/beta_stats/resistome_betadisper_season_aitchison"
+  )
+)
+
+write.csv(
+  betadisper_results,
+  "R_out/tab/beta_stats/resistome_betadisper_summary.csv",
+  row.names = FALSE
+)
 
 ###############################
 ## 10. Resistome heatmap
@@ -802,7 +1156,7 @@ write.csv(mag_info2, "R_out/tab/mag_info2_with_host_enrichment.csv", row.names =
 ## 17. Risk score
 ###############################
 
-for (cc in c("ARG_count", "mobile_ARG_loose_count", "mobile_ARG_strict_count",
+for (cc in c("ARG_count", "mobile_ARG_loose_count",
              "plasmid_like_contig_count", "virus_like_contig_count",
              "integron_contig_count", "integrase_contig_count",
              "IS_contig_count", "is_element_total", "transposase_total",
@@ -817,13 +1171,13 @@ mag_info2 <- mag_info2 %>%
     yak_score = ifelse(host_enrichment == "yak_enriched", 1, 0),
     risk_score =
       0.18 * scale01(ARG_count) +
-      0.18 * scale01(mobile_ARG_strict_count) +
-      0.08 * scale01(mobile_ARG_loose_count) +
-      0.10 * scale01(plasmid_like_contig_count) +
+      0.18 * scale01(mobile_ARG_loose_count) +
+      0.08 * scale01(virus_like_contig_count) +
+      0.08 * scale01(plasmid_like_contig_count) +
       0.08 * scale01(integrase_contig_count) +
       0.08 * scale01(IS_contig_count) +
       0.08 * scale01(transposase_total) +
-      0.10 * scale01(vfdb_vfg_count) +
+      0.12 * scale01(vfdb_vfg_count) +
       0.05 * shared_score +
       0.07 * yak_score
   )
@@ -1370,6 +1724,23 @@ capture.output(summary(m1), file = "R_out/tab/lm_ARG_burden_host_season.txt")
 capture.output(summary(m2), file = "R_out/tab/lm_ARG_richness_host_season.txt")
 capture.output(summary(m3), file = "R_out/tab/lm_ARG_shannon_host_season.txt")
 capture.output(summary(m4), file = "R_out/tab/lm_ARGhost_abundance_host_season.txt")
+
+plot_lm_fixef <- function(model, outfile, xlab = "Effect size"){
+  coef_df <- broom::tidy(model, conf.int = TRUE) %>%
+    dplyr::filter(term != "(Intercept)")
+  p <- ggplot(coef_df, aes(x = estimate, y = reorder(term, estimate))) +
+    geom_point(size = 3) +
+    geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+    geom_vline(xintercept = 0, linetype = 2, color = "grey50") +
+    theme_bw() +
+    labs(x = xlab, y = NULL)
+  ggsave(outfile, p, width = 6, height = 4)
+  return(p)
+}
+p_m1_fixef <- plot_lm_fixef(m1, "R_out/fig/lm_ARG_burden_fixef.pdf")
+p_m2_fixef <- plot_lm_fixef(m2, "R_out/fig/lm_ARG_richness_fixef.pdf")
+p_m3_fixef <- plot_lm_fixef(m3, "R_out/fig/lm_ARG_shannon_fixef.pdf")
+p_m4_fixef <- plot_lm_fixef(m4, "R_out/fig/lm_ARGhost_abundance_fixef.pdf")
 
 ###############################
 ## 21. ARG-MAG bipartite network
