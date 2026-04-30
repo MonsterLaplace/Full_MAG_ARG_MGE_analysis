@@ -1224,7 +1224,51 @@ arghost_burden <- data.frame(
   left_join(meta, by = "sample")
 
 write.csv(arghost_burden, "R_out/tab/ARGhost_MAG_abundance_by_sample.csv", row.names = FALSE)
-plot_box_jitter(arghost_burden, "host", "ARGhost_MAG_abundance", "host", "R_out/fig/ARGhost_MAG_abundance_by_host.pdf")
+
+## ---- Statistical test by host ----
+if ("host" %in% colnames(arghost_burden) &&
+    has_exactly_two_groups(arghost_burden$host)) {
+
+  stat_df <- arghost_burden %>%
+    filter(!is.na(host), !is.na(ARGhost_MAG_abundance))
+
+  wilcox_res <- wilcox.test(ARGhost_MAG_abundance ~ host, data = stat_df)
+
+  stat_out <- data.frame(
+    variable = "ARGhost_MAG_abundance",
+    group_var = "host",
+    group1 = unique(as.character(stat_df$host))[1],
+    group2 = unique(as.character(stat_df$host))[2],
+    method = "Wilcoxon rank-sum test",
+    p_value = wilcox_res$p.value,
+    statistic = unname(wilcox_res$statistic)
+  )
+
+  write.csv(stat_out,
+            "R_out/tab/ARGhost_MAG_abundance_by_host_stats.csv",
+            row.names = FALSE)
+
+  p_label <- paste0("Wilcoxon p = ", signif(wilcox_res$p.value, 3))
+
+  p_arghost_host <- ggplot(stat_df, aes(x = host, y = ARGhost_MAG_abundance, fill = host)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(aes(color = host), width = 0.15, alpha = 0.7, size = 2, show.legend = FALSE) +
+    theme_bw() +
+    labs(x = NULL, y = "ARGhost_MAG_abundance") +
+    annotate("text",
+             x = 1.5,
+             y = max(stat_df$ARGhost_MAG_abundance, na.rm = TRUE) * 1.05,
+             label = p_label,
+             size = 4)
+
+  ggsave("R_out/fig/ARGhost_MAG_abundance_by_host.pdf",
+         p_arghost_host, width = 4, height = 4)
+
+} else {
+
+  plot_box_jitter(arghost_burden, "host", "ARGhost_MAG_abundance", "host",
+                  "R_out/fig/ARGhost_MAG_abundance_by_host.pdf")
+}
 
 ###############################
 ## 15. Shared vs host-specific MAG
