@@ -1,5 +1,5 @@
 ###############################
-## Full customized R workflow v4
+## Full customized R workflow v4.3
 ## For representative MAG + ARG + MGE analysis
 ## Dataset: Yak vs White-lipped deer
 ## Beautified/updated version with smart boxplots
@@ -534,6 +534,134 @@ mag_info <- mag_info %>%
   )
 
 write.csv(mag_info, "R_out/tab/mag_info_merged.csv", row.names = FALSE)
+###############################
+## 6b. Taxonomic composition of ARG-host MAGs
+###############################
+
+cat("[INFO] Taxonomic summary of ARG-host MAGs...\n")
+
+## ---- Phylum level: counts ----
+arg_host_taxa_phylum <- mag_info %>%
+  filter(is_ARG_host == 1) %>%
+  count(phylum, sort = TRUE) %>%
+  filter(!is.na(phylum), phylum != "")
+
+write.csv(arg_host_taxa_phylum,
+          "R_out/tab/ARG_host_MAG_phylum_counts.csv",
+          row.names = FALSE)
+
+if(nrow(arg_host_taxa_phylum) > 0){
+  p_arg_host_taxa_phylum <- arg_host_taxa_phylum %>%
+    slice(1:min(15, n())) %>%
+    ggplot(aes(x = reorder(phylum, n), y = n)) +
+    geom_col(fill = "#1f78b4") +
+    coord_flip() +
+    theme_bw() +
+    labs(x = NULL, y = "Number of ARG-host MAGs",
+         title = "ARG-host MAG taxonomy at phylum level")
+
+  ggsave("R_out/fig/ARG_host_MAG_phylum_barplot.pdf",
+         p_arg_host_taxa_phylum, width = 6, height = 5)
+}
+
+## ---- Genus level: counts ----
+arg_host_taxa_genus <- mag_info %>%
+  filter(is_ARG_host == 1) %>%
+  count(genus, sort = TRUE) %>%
+  filter(!is.na(genus), genus != "")
+
+write.csv(arg_host_taxa_genus,
+          "R_out/tab/ARG_host_MAG_genus_counts.csv",
+          row.names = FALSE)
+
+if(nrow(arg_host_taxa_genus) > 0){
+  p_arg_host_taxa_genus <- arg_host_taxa_genus %>%
+    slice(1:min(20, n())) %>%
+    ggplot(aes(x = reorder(genus, n), y = n)) +
+    geom_col(fill = "#33a02c") +
+    coord_flip() +
+    theme_bw() +
+    labs(x = NULL, y = "Number of ARG-host MAGs",
+         title = "ARG-host MAG taxonomy at genus level")
+
+  ggsave("R_out/fig/ARG_host_MAG_genus_barplot.pdf",
+         p_arg_host_taxa_genus, width = 6, height = 6)
+}
+
+###############################
+## 6c. Abundance-weighted ARG-host reservoirs
+###############################
+
+cat("[INFO] Computing abundance-weighted ARG-host reservoirs...\n")
+
+## 使用 sample_mag_abundance.tsv 读入后的 mag_mat
+## 列名是 MAG，行为 sample
+mag_mean_abund <- data.frame(
+  MAG = colnames(mag_mat),
+  mean_abundance = colMeans(mag_mat, na.rm = TRUE)
+)
+
+## ---- Phylum level: abundance-weighted ----
+arg_host_weighted_phylum <- mag_info %>%
+  left_join(mag_mean_abund, by = "MAG") %>%
+  filter(is_ARG_host == 1) %>%
+  group_by(phylum) %>%
+  summarise(
+    weighted_abundance = sum(mean_abundance, na.rm = TRUE),
+    n_ARG_host_MAG = n(),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(phylum), phylum != "") %>%
+  arrange(desc(weighted_abundance))
+
+write.csv(arg_host_weighted_phylum,
+          "R_out/tab/ARG_host_MAG_phylum_weighted.csv",
+          row.names = FALSE)
+
+if(nrow(arg_host_weighted_phylum) > 0){
+  p_arg_weighted_phylum <- arg_host_weighted_phylum %>%
+    slice(1:min(15, n())) %>%
+    ggplot(aes(x = reorder(phylum, weighted_abundance), y = weighted_abundance)) +
+    geom_col(fill = "#e31a1c") +
+    coord_flip() +
+    theme_bw() +
+    labs(x = NULL, y = "Weighted abundance of ARG-host MAGs",
+         title = "Abundance-weighted ARG-host reservoirs at phylum level")
+
+  ggsave("R_out/fig/ARG_host_MAG_phylum_weighted_barplot.pdf",
+         p_arg_weighted_phylum, width = 6, height = 5)
+}
+
+## ---- Genus level: abundance-weighted ----
+arg_host_weighted_genus <- mag_info %>%
+  left_join(mag_mean_abund, by = "MAG") %>%
+  filter(is_ARG_host == 1) %>%
+  group_by(genus) %>%
+  summarise(
+    weighted_abundance = sum(mean_abundance, na.rm = TRUE),
+    n_ARG_host_MAG = n(),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(genus), genus != "") %>%
+  arrange(desc(weighted_abundance))
+
+write.csv(arg_host_weighted_genus,
+          "R_out/tab/ARG_host_MAG_genus_weighted.csv",
+          row.names = FALSE)
+
+if(nrow(arg_host_weighted_genus) > 0){
+  p_arg_weighted_genus <- arg_host_weighted_genus %>%
+    slice(1:min(20, n())) %>%
+    ggplot(aes(x = reorder(genus, weighted_abundance), y = weighted_abundance)) +
+    geom_col(fill = "#ff7f00") +
+    coord_flip() +
+    theme_bw() +
+    labs(x = NULL, y = "Weighted abundance of ARG-host MAGs",
+         title = "Abundance-weighted ARG-host reservoirs at genus level")
+
+  ggsave("R_out/fig/ARG_host_MAG_genus_weighted_barplot.pdf",
+         p_arg_weighted_genus, width = 6, height = 6)
+}
 
 ###############################
 ## 7. Transform abundance matrices
