@@ -2122,45 +2122,234 @@ p_m4_fixef <- plot_lm_fixef(m4, "R_out/fig/lm_ARGhost_abundance_fixef.pdf")
 ###############################
 
 mag_arg_edges <- mag_arg %>%
-  select(MAG, ARG, Class) %>%
-  distinct()
+  dplyr::select(MAG, ARG, Class) %>%
+  dplyr::distinct()
 
-top_mag <- highrisk_mag %>% slice(1:min(50, n())) %>% pull(MAG)
-top_arg2 <- mag_arg %>% count(ARG, sort = TRUE) %>% slice(1:min(30, n())) %>% pull(ARG)
+top_mag <- highrisk_mag %>%
+  dplyr::slice(1:min(50, n())) %>%
+  dplyr::pull(MAG)
+
+top_arg2 <- mag_arg %>%
+  dplyr::count(ARG, sort = TRUE) %>%
+  dplyr::slice(1:min(30, n())) %>%
+  dplyr::pull(ARG)
 
 net_edges <- mag_arg_edges %>%
-  filter(MAG %in% top_mag, ARG %in% top_arg2)
+  dplyr::filter(MAG %in% top_mag, ARG %in% top_arg2)
 
 if (nrow(net_edges) > 0) {
+
+  # 若有 ARG_std，则优先使用简化名称
+  if ("ARG_std" %in% colnames(mag_arg)) {
+    arg_label_map2 <- mag_arg %>%
+      dplyr::select(ARG, ARG_std) %>%
+      dplyr::filter(!is.na(ARG), !is.na(ARG_std), ARG_std != "") %>%
+      dplyr::distinct()
+
+    net_edges <- net_edges %>%
+      dplyr::left_join(arg_label_map2, by = "ARG") %>%
+      dplyr::mutate(ARG_label = ifelse(!is.na(ARG_std) & ARG_std != "", ARG_std, ARG))
+  } else {
+    net_edges$ARG_label <- net_edges$ARG
+  }
+
+  # 节点表
   mag_nodes <- data.frame(
     name = unique(net_edges$MAG),
     node_type = "MAG"
   ) %>%
-    left_join(mag_info2 %>% select(MAG, host_enrichment, risk_score), by = c("name" = "MAG"))
+    dplyr::left_join(
+      mag_info2 %>% dplyr::select(MAG, host_enrichment, risk_score),
+      by = c("name" = "MAG")
+    )
 
   arg_nodes <- data.frame(
-    name = unique(net_edges$ARG),
+    name = unique(net_edges$ARG_label),
     node_type = "ARG"
   )
 
-  nodes <- bind_rows(mag_nodes, arg_nodes)
+  nodes <- dplyr::bind_rows(mag_nodes, arg_nodes)
+
+  # 边表
+  edges2 <- net_edges %>%
+    dplyr::select(from = MAG, to = ARG_label) %>%
+    dplyr::distinct()
 
   g_bi <- graph_from_data_frame(
-    d = net_edges %>% select(from = MAG, to = ARG),
+    d = edges2,
     vertices = nodes,
     directed = FALSE
   )
 
-  p_net <- ggraph(g_bi, layout = "fr") +
-    geom_edge_link(alpha = 0.3, colour = "grey50") +
-    geom_node_point(aes(color = node_type,
-                        size = ifelse(node_type == "MAG", risk_score + 1, 2))) +
-    geom_node_text(aes(label = ifelse(node_type == "ARG", name, "")),
-                   repel = TRUE, size = 3) +
-    scale_color_manual(values = c("MAG" = "#1f78b4", "ARG" = "#e31a1c")) +
-    theme_void()
+  V(g_bi)$degree <- igraph::degree(g_bi)
 
-  ggsave("R_out/fig/network_ARG_MAG_bipartite.pdf", p_net, width = 10, height = 8)
+  node_df2 <- igraph::as_data_frame(g_bi, what = "vertices") %>%
+    dplyr::mutate(
+      risk_score = ifelse(is.na(risk_score), 0, risk_score)
+    )
+
+  # 将 MAG 风险值分级，用于 size 图例
+  mag_risk_vals2 <- node_df2$risk_score[node_df2$node_type == "MAG"]
+
+  if (length(mag_risk_vals2[is.finite(mag_risk_vals2)]) >= 3 &&
+      length(unique(mag_risk_vals2[is.finite(mag_risk_vals2)])) >= 3) {
+
+    qs2 <- quantile(mag_risk_vals2, probs = c(0.33, 0.67), na.rm = TRUE)
+
+    node_df2 <- node_df2 %>%
+      dplyr::mutate(
+        size_group = dplyr::case_when(
+          node_type == "MAG" & risk_score <= qs2[1] ~ "MAG: low risk",
+          node_type == "MAG" & risk_score > qs2[1] & risk_score <= qs2[2] ~ "MAG: medium risk",
+          node_type == "MAG" & risk_score > qs2[2] ~ "MAG: high risk",
+          node_type == "ARG" ~ "ARG",
+          TRUE ~ "Other"
+        )
+      )
+  } else {
+    node_df2 <- node_df2 %>%
+      dplyr::mutate(
+        size_group = dplyr::case_when(
+          node_type == "MAG" ~ "MAG",
+          node_type == "ARG" ~ "ARG",
+          TRUE ~ "Other"
+        )
+      )
+  }
+
+  # 标签策略：ARG 只标高连接度；MAG 不标
+  arg_deg2 <- node_df2$degree[node_df2$node_type == "ARG"]
+  arg_degree_cutoff2 <- if (length(arg_deg2) > 0) quantile(arg_deg2, 0.75, na.rm = TRUE) else Inf
+  if (!is.finite(arg_degree_cutoff2)) arg_degree_cutoff2 <- 2
+
+  node_df2 <- node_df2 %>%
+    dplyr::mutate(
+      label = dplyr::case_when(
+        node_type == "ARG" & degree >= arg_degree_cutoff2 ~ name,
+        TRUE ~ NA_character_
+      )
+    )
+
+  g_bi2 <- graph_from_data_frame(edges2, vertices = node_df2, directed = FALSE)
+
+  # size 图例定义
+  if (any(grepl("^MAG: ", node_df2$size_group))) {
+    size_values2 <- c(
+      "MAG: low risk" = 4,
+      "MAG: medium risk" = 6,
+      "MAG: high risk" = 8,
+      "ARG" = 4.3
+    )
+    size_breaks2 <- c("MAG: low risk", "MAG: medium risk", "MAG: high risk", "ARG")
+  } else {
+    size_values2 <- c(
+      "MAG" = 6,
+      "ARG" = 4.3
+    )
+    size_breaks2 <- c("MAG", "ARG")
+  }
+
+  p_net <- ggraph(g_bi2, layout = "stress") +
+    geom_edge_link(
+      colour = "grey75",
+      alpha = 0.35,
+      linewidth = 0.45
+    ) +
+    geom_node_point(
+      aes(fill = node_type, shape = node_type, size = size_group),
+      color = "black",
+      alpha = 0.95,
+      stroke = 0.45
+    ) +
+    geom_node_text(
+      aes(label = label),
+      repel = TRUE,
+      size = 3.2,
+      color = "black",
+      max.overlaps = Inf
+    ) +
+    scale_fill_manual(
+      name = "Node type",
+      values = c(
+        "MAG" = "#4C78A8",
+        "ARG" = "#E45756"
+      )
+    ) +
+    scale_shape_manual(
+      name = "Node type",
+      values = c(
+        "MAG" = 21,
+        "ARG" = 22
+      )
+    ) +
+    scale_size_manual(
+      name = "Node importance",
+      values = size_values2,
+      breaks = size_breaks2
+    ) +
+    guides(
+      fill = guide_legend(
+        order = 1,
+        override.aes = list(
+          shape = 21,
+          size = 5,
+          color = "black",
+          alpha = 1
+        )
+      ),
+      shape = guide_legend(
+        order = 2,
+        override.aes = list(
+          fill = "grey70",
+          size = 5,
+          color = "black",
+          alpha = 1
+        )
+      ),
+      size = guide_legend(
+        order = 3,
+        override.aes = list(
+          shape = 21,
+          fill = "grey70",
+          color = "black",
+          alpha = 1
+        )
+      )
+    ) +
+    labs(
+      title = "ARG–MAG bipartite network",
+      subtitle = "Node fill and shape indicate category; MAG node size reflects risk level",
+      caption = "ARG labels are simplified using ARG_std when available. Only high-degree ARGs are labeled."
+    ) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5, color = "grey30"),
+      plot.caption = element_text(size = 9, color = "grey40"),
+      legend.position = "right",
+      legend.box = "vertical",
+      legend.title = element_text(face = "bold", size = 11),
+      legend.text = element_text(size = 10),
+      legend.spacing.y = unit(0.2, "cm")
+    )
+
+  ggsave(
+    "R_out/fig/network_ARG_MAG_bipartite.pdf",
+    p_net,
+    width = 11,
+    height = 8.5
+  )
+
+  write.table(
+    net_edges,
+    "R_out/tab/ARG_MAG_bipartite_edges_used.tsv",
+    sep = "\t", quote = FALSE, row.names = FALSE
+  )
+} else {
+  writeLines(
+    "Bipartite network skipped: no valid edges after filtering top MAGs and top ARGs.",
+    "R_out/tab/ARG_MAG_bipartite_skipped.txt"
+  )
 }
 
 ###############################
