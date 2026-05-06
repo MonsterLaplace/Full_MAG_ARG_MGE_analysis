@@ -1,5 +1,5 @@
 ###############################
-## Full customized R workflow v4.3
+## Full customized R workflow v4.4
 ## For representative MAG + ARG + MGE analysis
 ## Dataset: Yak vs White-lipped deer
 ## Beautified/updated version with smart boxplots
@@ -534,6 +534,7 @@ mag_info <- mag_info %>%
   )
 
 write.csv(mag_info, "R_out/tab/mag_info_merged.csv", row.names = FALSE)
+
 ###############################
 ## 6b. Taxonomic composition of ARG-host MAGs
 ###############################
@@ -1270,6 +1271,7 @@ if ("host" %in% colnames(arghost_burden) &&
                   "R_out/fig/ARGhost_MAG_abundance_by_host.pdf")
 }
 
+
 ###############################
 ## 15. Shared vs host-specific MAG
 ###############################
@@ -1830,6 +1832,11 @@ if(length(vf_cols_main) > 0){
 ## 19. Random forest
 ###############################
 
+cat("[INFO] Running random forest models...\n")
+
+##----------------------------
+## Feature prevalence filtering
+##----------------------------
 arg_prev <- colMeans(arg_mat > 0)
 arg_rf <- arg_mat[, arg_prev >= 0.1, drop = FALSE]
 
@@ -1842,7 +1849,26 @@ if(length(arg_host_mags) > 0){
   arghost_rf <- arghost_rf[, arghost_prev >= 0.1, drop = FALSE]
 }
 
+## Detect function matrix automatically
+if (exists("func_mat")) {
+  func_prev <- colMeans(func_mat > 0)
+  func_rf <- func_mat[, func_prev >= 0.1, drop = FALSE]
+} else if (exists("kegg_mat")) {
+  func_prev <- colMeans(kegg_mat > 0)
+  func_rf <- kegg_mat[, func_prev >= 0.1, drop = FALSE]
+} else if (exists("ko_mat")) {
+  func_prev <- colMeans(ko_mat > 0)
+  func_rf <- ko_mat[, func_prev >= 0.1, drop = FALSE]
+} else {
+  func_rf <- NULL
+  cat("[WARN] No function matrix detected (func_mat / kegg_mat / ko_mat).\n")
+}
+
+##----------------------------
+## Run RF models
+##----------------------------
 rf_results <- list()
+
 tmp_rf <- run_rf_classifier(arg_rf, meta, prefix = "RF_ARG")
 if(!is.null(tmp_rf)) rf_results$ARG <- tmp_rf
 
@@ -1854,6 +1880,14 @@ if(exists("arghost_rf") && ncol(arghost_rf) > 2){
   if(!is.null(tmp_rf)) rf_results$ARGHOST <- tmp_rf
 }
 
+if(!is.null(func_rf) && ncol(func_rf) > 2){
+  tmp_rf <- run_rf_classifier(func_rf, meta, prefix = "RF_FUNCTION")
+  if(!is.null(tmp_rf)) rf_results$FUNCTION <- tmp_rf
+}
+
+##----------------------------
+## AUC comparison
+##----------------------------
 rf_auc <- data.frame(
   model = names(rf_results),
   AUC = sapply(rf_results, function(x) as.numeric(x$auc))
@@ -1871,13 +1905,182 @@ if(nrow(rf_auc) > 0){
   ggsave("R_out/fig/RF_AUC_comparison.pdf", p_auc, width = 5, height = 4)
 }
 
-if("ARGHOST" %in% names(rf_results)){
-  top_imp <- rf_results$ARGHOST$importance %>% slice(1:min(20, n()))
-  p_imp <- ggplot(top_imp, aes(reorder(feature, MeanDecreaseAccuracy), MeanDecreaseAccuracy)) +
-    geom_col(fill = "#d95f02") +
+##----------------------------
+## Helper: save importance tables and plots
+##----------------------------
+save_rf_importance_outputs <- function(rf_obj, model_name, top_n = 20, fill_color = "#1f78b4"){
+  if(is.null(rf_obj)) return(NULL)
+  if(is.null(rf_obj$importance)) return(NULL)
+
+  imp_df <- rf_obj$importance
+
+  ## Ensure feature column exists
+  if(!"feature" %in% colnames(imp_df)){
+    imp_df$feature <- rownames(imp_df)
+  }
+
+  ## Auto-detect importance metric
+  metric_col <- NULL
+  if("MeanDecreaseAccuracy" %in% colnames(imp_df)){
+    metric_col <- "MeanDecreaseAccuracy"
+  } else if("MeanDecreaseGini" %in% colnames(imp_df)){
+    metric_col <- "MeanDecreaseGini"
+  } else {
+    numeric_cols <- colnames(imp_df)[sapply(imp_df, is.numeric)]
+    numeric_cols <- setdiff(numeric_cols, c("class"))
+    if(length(numeric_cols) > 0) metric_col <- numeric_cols[1]
+  }
+
+  if(is.null(metric_col)) return(NULL)
+
+  imp_df <- imp_df %>%
+    arrange(desc(.data[[metric_col]]))
+
+  imp_df$importance_value <- imp_df[[metric_col]]
+  imp_df$model <- model_name
+  imp_df$metric <- metric_col
+
+  ## Save full importance
+  write.csv(
+    imp_df,
+    paste0("R_out/tab/", model_name, "_feature_importance.csv"),
+    row.names = FALSE
+  )
+
+  ## Save top features
+  top_imp <- imp_df %>%
+    slice(1:min(top_n, n()))
+
+  write.csv(
+    top_imp,
+    paste0("R_out/tab/", model_name, "_top", top_n, "_importance.csv"),
+    row.names = FALSE
+  )
+
+  ## Plot top features
+  p_imp <- ggplot(top_imp, aes(x = reorder(feature, importance_value), y = importance_value)) +
+    geom_col(fill = fill_color) +
     coord_flip() +
-    theme_bw()
-  ggsave("R_out/fig/RF_ARGHOSTMAG_top20_importance.pdf", p_imp, width = 6, height = 6)
+    theme_bw() +
+    labs(
+      x = NULL,
+      y = metric_col,
+      title = paste("Top", top_n, "informative features:", model_name)
+    )
+
+  ggsave(
+    paste0("R_out/fig/", model_name, "_top", top_n, "_importance.pdf"),
+    p_imp,
+    width = 6,
+    height = 6
+  )
+
+  return(top_imp)
+}
+
+##----------------------------
+## Export top informative features
+##----------------------------
+top_imp_list <- list()
+
+if("ARG" %in% names(rf_results)){
+  top_imp_list$ARG <- save_rf_importance_outputs(
+    rf_obj = rf_results$ARG,
+    model_name = "RF_ARG",
+    top_n = 20,
+    fill_color = "#e31a1c"
+  )
+}
+
+if("MAG" %in% names(rf_results)){
+  top_imp_list$MAG <- save_rf_importance_outputs(
+    rf_obj = rf_results$MAG,
+    model_name = "RF_MAG",
+    top_n = 20,
+    fill_color = "#1f78b4"
+  )
+}
+
+if("ARGHOST" %in% names(rf_results)){
+  top_imp_list$ARGHOST <- save_rf_importance_outputs(
+    rf_obj = rf_results$ARGHOST,
+    model_name = "RF_ARGHOSTMAG",
+    top_n = 20,
+    fill_color = "#d95f02"
+  )
+}
+
+if("FUNCTION" %in% names(rf_results)){
+  top_imp_list$FUNCTION <- save_rf_importance_outputs(
+    rf_obj = rf_results$FUNCTION,
+    model_name = "RF_FUNCTION",
+    top_n = 20,
+    fill_color = "#33a02c"
+  )
+}
+
+##----------------------------
+## Combined summary of most informative features
+##----------------------------
+top_imp_all <- bind_rows(top_imp_list)
+
+if(nrow(top_imp_all) > 0){
+  write.csv(
+    top_imp_all,
+    "R_out/tab/RF_most_informative_features_top20_all.csv",
+    row.names = FALSE
+  )
+
+  p_top_all <- ggplot(
+    top_imp_all,
+    aes(x = importance_value, y = reorder(feature, importance_value), fill = model)
+  ) +
+    geom_col() +
+    facet_wrap(~ model, scales = "free_y") +
+    theme_bw() +
+    labs(
+      x = "Importance",
+      y = NULL,
+      title = "The most informative features from random forest models"
+    )
+
+  ggsave(
+    "R_out/fig/RF_most_informative_features_top20_all.pdf",
+    p_top_all,
+    width = 10,
+    height = 8
+  )
+}
+
+##----------------------------
+## Optional: annotated top MAGs
+##----------------------------
+if("MAG" %in% names(top_imp_list) && exists("mag_info")){
+  top_mag_annot <- top_imp_list$MAG %>%
+    left_join(
+      mag_info %>% select(MAG, phylum, genus),
+      by = c("feature" = "MAG")
+    )
+
+  write.csv(
+    top_mag_annot,
+    "R_out/tab/RF_MAG_top20_importance_annotated.csv",
+    row.names = FALSE
+  )
+}
+
+if("ARGHOST" %in% names(top_imp_list) && exists("mag_info")){
+  top_arghost_annot <- top_imp_list$ARGHOST %>%
+    left_join(
+      mag_info %>% select(MAG, phylum, genus),
+      by = c("feature" = "MAG")
+    )
+
+  write.csv(
+    top_arghost_annot,
+    "R_out/tab/RF_ARGHOSTMAG_top20_importance_annotated.csv",
+    row.names = FALSE
+  )
 }
 
 ###############################
